@@ -1,9 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Menu, X, Heart, ShoppingBag } from "lucide-react";
 
 export default function Navbar() {
   const [open, setOpen] = useState(false);
+
+  const [favCount, setFavCount] = useState(() => {
+    const local = JSON.parse(localStorage.getItem("favorites")) || [];
+    return local.length;
+  });
+  const [cartCount, setCartCount] = useState(() => {
+    const local = JSON.parse(localStorage.getItem("cart")) || [];
+    return local.length;
+  });
 
   const links = [
     { label: "Home", href: "/" },
@@ -12,6 +21,25 @@ export default function Navbar() {
     { label: "Products", href: "/products" },
     { label: "Contact", href: "/contact" },
   ];
+
+  // Keep counters in sync with localStorage across the whole app
+  useEffect(() => {
+    const syncFavCount = () => {
+      const local = JSON.parse(localStorage.getItem("favorites")) || [];
+      setFavCount(local.length);
+    };
+    const syncCartCount = () => {
+      const local = JSON.parse(localStorage.getItem("cart")) || [];
+      setCartCount(local.length);
+    };
+
+    window.addEventListener("favoritesUpdated", syncFavCount);
+    window.addEventListener("cartUpdated", syncCartCount);
+    return () => {
+      window.removeEventListener("favoritesUpdated", syncFavCount);
+      window.removeEventListener("cartUpdated", syncCartCount);
+    };
+  }, []);
 
   return (
     <nav className="bg-surface border-b border-border sticky top-0 z-50">
@@ -49,20 +77,30 @@ export default function Navbar() {
 
           {/* Icons + mobile menu button */}
           <div className="flex items-center gap-3">
-            <a
-              href="#wishlist"
+            <Link
+              to="/favorites"
               aria-label="Wishlist"
-              className="inline-flex p-2 rounded-md text-primary hover:text-accent transition-colors"
+              className="relative inline-flex p-2 rounded-md text-primary hover:text-accent transition-colors"
             >
               <Heart size={22} />
-            </a>
-            <a
-              href="#cart"
+              {favCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-accent text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center">
+                  {favCount}
+                </span>
+              )}
+            </Link>
+            <Link
+              to="/cart"
               aria-label="Shop"
-              className="inline-flex p-2 rounded-md text-primary hover:text-accent transition-colors"
+              className="relative inline-flex p-2 rounded-md text-primary hover:text-accent transition-colors"
             >
               <ShoppingBag size={22} />
-            </a>
+              {cartCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-accent text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center">
+                  {cartCount}
+                </span>
+              )}
+            </Link>
 
             <button
               onClick={() => setOpen(!open)}
