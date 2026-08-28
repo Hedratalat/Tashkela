@@ -18,28 +18,25 @@ export default function NavBarDash({ onMenuClick }) {
 
   return (
     <nav className="bg-primary text-white z-40 shadow-md border-b border-border">
-      <div className="flex items-center justify-between px-4 sm:px-6 h-16 sm:h-20">
+      <div className="flex items-center px-4 sm:px-6 h-16 sm:h-20">
         {/* زر القائمة للموبايل */}
         <button
           onClick={onMenuClick}
-          className="lg:hidden bg-primary-hover p-2 rounded-md hover:bg-accent transition text-white"
+          className="lg:hidden bg-primary-hover p-2 ml-2 rounded-md hover:bg-accent transition text-white"
         >
           <Menu size={22} />
         </button>
-
         <h2 className="text-lg sm:text-2xl font-sans font-semibold text-white">
-          Welcome Admin
+          مرحبًا بك
         </h2>
-
         <button
           onClick={handleLogout}
           aria-label="Logout"
-          className="flex items-center gap-2
+          className="mr-auto flex items-center gap-2
            bg-accent text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-lg
             hover:bg-accent-hover transition"
         >
-          Logout
-          <FiLogOut className="w-4 h-4 sm:w-5 sm:h-5" />
+          تسجيل الخروج <FiLogOut className="w-4 h-4 sm:w-5 sm:h-5" />
         </button>
       </div>
     </nav>

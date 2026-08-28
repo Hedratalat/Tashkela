@@ -3,11 +3,12 @@ import { X } from "lucide-react";
 
 export default function SideBarDash({ isOpen, setIsOpen }) {
   const navItems = [
-    { to: "addProducts", label: "Add Products" },
-    { to: "productsManagement", label: "Manage Products" },
-    { to: "ordersDah", label: "Orders" },
-    { to: "feedback", label: "Feedback" },
-    { to: "message", label: "Message" },
+    { to: "heroSection", label: "الصفحة الرئيسية" },
+    { to: "addProducts", label: "إضافة المنتجات" },
+    { to: "productsManagement", label: "إدارة المنتجات" },
+    { to: "ordersDah", label: "الطلبات" },
+    { to: "feedback", label: "التقييمات" },
+    { to: "message", label: "الرسائل" },
   ];
 
   return (
@@ -35,7 +36,7 @@ export default function SideBarDash({ isOpen, setIsOpen }) {
         </button>
 
         <h2 className="text-2xl font-sans font-bold border-b border-border mb-8 pb-4 text-center text-white">
-          Dashboard
+          لوحة التحكم
         </h2>
 
         <nav className="flex-1">

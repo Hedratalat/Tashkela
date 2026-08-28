@@ -12,6 +12,10 @@ import { Toaster } from "react-hot-toast";
 import Favorites from "./pages/Favorites";
 import Cart from "./pages/Cart";
 import Checkout from "./pages/Checkout";
+import MessageDash from "./pages/MessageDash";
+import Login from "./pages/Login";
+import HeroDashboard from "./pages/HeroDashboard";
+import FeedbackDash from "./pages/FeedbackDash";
 
 function App() {
   return (
@@ -19,6 +23,7 @@ function App() {
       <Toaster position="top-center" />
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
         <Route path="/delivery" element={<DeliveryReturns />} />
         <Route path="/about" element={<AboutUs />} />
         <Route path="/contact" element={<ContactUs />} />
@@ -38,7 +43,10 @@ function App() {
         >
           <Route index element={<Navigate to="addProducts" replace />} />
           <Route path="addProducts" element={<AddProducts />} />
+          <Route path="heroSection" element={<HeroDashboard />} />
           <Route path="productsManagement" element={<ManageProducts />} />
+          <Route path="feedback" element={<FeedbackDash />} />
+          <Route path="message" element={<MessageDash />} />
         </Route>
       </Routes>
     </BrowserRouter>

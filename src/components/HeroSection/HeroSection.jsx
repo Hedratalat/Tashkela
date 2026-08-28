@@ -1,103 +1,154 @@
-import { Truck, ShieldCheck, RotateCcw, ArrowUpRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
+import { db } from "../../firebase";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+
+const AUTOPLAY_DELAY = 5000;
 
 export default function HeroSection() {
+  const [slides, setSlides] = useState([]);
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    const q = query(collection(db, "heroSlides"), orderBy("order", "asc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs
+        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+        .filter((slide) => slide.active !== false);
+      setSlides(data);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Reset to a valid index if slides shrink
+  useEffect(() => {
+    if (current >= slides.length) setCurrent(0);
+  }, [slides, current]);
+
+  const goTo = (index) => setCurrent(index);
+  const goNext = () =>
+    setCurrent((prev) => (slides.length ? (prev + 1) % slides.length : 0));
+  const goPrev = () =>
+    setCurrent((prev) =>
+      slides.length ? (prev - 1 + slides.length) % slides.length : 0,
+    );
+
+  // Auto-rotate every 5 seconds — restarts whenever the slide changes,
+  // so manual navigation via arrows/dots also resets the timer
+  useEffect(() => {
+    if (slides.length <= 1) return;
+    const timer = setInterval(goNext, AUTOPLAY_DELAY);
+    return () => clearInterval(timer);
+  }, [current, slides.length]);
+
+  if (slides.length === 0) return null;
+
+  const slide = slides[current];
+
   return (
-    <section className="relative overflow-hidden bg-background">
-      {/* Ambient accent shapes */}
-      <div className="pointer-events-none absolute -top-32 -right-32 w-[28rem] h-[28rem] rounded-full bg-accent/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-40 -left-24 w-[24rem] h-[24rem] rounded-full bg-accent/10 blur-3xl" />
-
-      <div className="relative max-w-6xl mx-auto px-6 pt-16 pb-20 md:pb-28">
-        <div className="grid md:grid-cols-2 gap-14 items-center">
-          {/* Left: copy */}
-          <div>
-            <h1 className="text-5xl md:text-6xl font-extrabold tracking-tighter text-primary leading-[1.05]">
-              Built for every
-              <br />
-              <span className="italic text-accent">step</span> you take.
-            </h1>
-
-            <p className="mt-6 text-base md:text-lg text-grayText max-w-md leading-relaxed">
-              We don't chase trends, we set the standard. Original quality, real
-              comfort, and a fit that stays with you long after you walk out the
-              door.
-            </p>
-
-            <div className="mt-9 flex flex-wrap items-center gap-4">
-              <a
-                href="#shop"
-                className="inline-flex items-center gap-2 bg-accent hover:bg-accent-hover text-surface text-base font-semibold px-7 py-3.5 rounded-lg transition-colors"
-              >
-                Shop Collection
-                <ArrowUpRight size={18} />
-              </a>
-              <a
-                href="#about"
-                className="inline-flex items-center gap-2 text-base font-semibold text-primary hover:text-accent px-2 py-3.5 transition-colors"
-              >
-                Our Story
-              </a>
-            </div>
-
-            {/* Trust strip */}
-            <div className="mt-12 grid grid-cols-3 gap-4 max-w-md">
-              <div className="flex flex-col gap-2">
-                <Truck size={20} className="text-accent" />
-                <span className="text-xs font-medium text-grayText leading-tight">
-                  Fast delivery
-                  <br />
-                  nationwide
+    // Small top padding just clears the floating pill nav (from the overlay Navbar)
+    // that sits partially over this section's top edge — the top navbar row above
+    // it already pushes this section down normally, so no large offset is needed here
+    <section className="relative bg-primary overflow-hidden pt-0 sm:pt-8 ">
+      <div className="relative max-w-7xl mx-auto px-6 py-16 md:py-24">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+          {/* Text — right side (RTL reading order) */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={slide.id + "-text"}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
+              className="order-1 md:order-2 text-center md:text-right"
+            >
+              {slide.badge && (
+                <span className="inline-block bg-accent text-white text-sm font-semibold px-4 py-1.5 rounded-full mb-5">
+                  {slide.badge}
                 </span>
-              </div>
-              <div className="flex flex-col gap-2">
-                <ShieldCheck size={20} className="text-accent" />
-                <span className="text-xs font-medium text-grayText leading-tight">
-                  100% original
-                  <br />
-                  guarantee
-                </span>
-              </div>
-              <div className="flex flex-col gap-2">
-                <RotateCcw size={20} className="text-accent" />
-                <span className="text-xs font-medium text-grayText leading-tight">
-                  Easy size
-                  <br />
-                  exchange
-                </span>
-              </div>
-            </div>
-          </div>
+              )}
 
-          {/* Right: visual */}
-          <div className="relative">
-            <div className="relative aspect-square rounded-3xl bg-surface border border-border shadow-sm overflow-hidden flex items-center justify-center">
-              {/* Evergreen credibility badge instead of a discount tag */}
-              <div className="absolute top-6 right-6 bg-primary text-surface rounded-2xl px-5 py-4 text-center shadow-lg">
-                <p className="text-3xl font-extrabold italic leading-none">
-                  10K+
+              <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold text-white leading-[1.15] mb-5">
+                {slide.title}
+              </h1>
+
+              {slide.price && (
+                <p className="text-2xl sm:text-3xl font-bold text-white mb-8">
+                  {slide.price} ج.م
                 </p>
-                <p className="text-[11px] font-semibold tracking-wide text-surface/70 mt-1">
-                  PAIRS SOLD
-                </p>
-              </div>
+              )}
 
-              {/* Product shot */}
+              {slide.buttonText && (
+                <a
+                  href={slide.buttonLink || "#"}
+                  className="inline-block bg-accent hover:bg-accent-hover text-white font-bold px-8 py-3.5 rounded-full transition-colors duration-200"
+                >
+                  {slide.buttonText}
+                </a>
+              )}
+            </motion.div>
+          </AnimatePresence>
+
+          {/* Image — left side (RTL reading order) */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={slide.id + "-image"}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
+              className="order-2 md:order-1 flex justify-center"
+            >
               <img
-                src="/public/739155566_1061532349638321_1379548899281659512_n.jpg"
-                alt="Featured sneaker"
-                className="w-3/4 h-3/4 object-contain rounded-2xl"
+                src={slide.imageUrl}
+                alt={slide.title}
+                className="max-h-72 sm:max-h-96 w-auto object-contain drop-shadow-2xl"
               />
-
-              <div className="absolute bottom-6 left-6 bg-surface/90 backdrop-blur border border-border rounded-xl px-4 py-3 flex items-center gap-3">
-                <p className="text-xs font-semibold text-primary leading-tight">
-                  2,000+ happy
-                  <br />
-                  customers
-                </p>
-              </div>
-            </div>
-          </div>
+            </motion.div>
+          </AnimatePresence>
         </div>
+
+        {/* Side arrows — desktop only, vertically centered on the content row, sitting at the outer edges */}
+        {slides.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={goPrev}
+              aria-label="السابق"
+              className="hidden md:flex absolute top-1/2 -translate-y-1/2 right-0 w-10 h-10 rounded-full bg-white/10 hover:bg-accent items-center justify-center text-white transition-colors duration-200"
+            >
+              <ChevronRight size={24} />
+            </button>
+            <button
+              type="button"
+              onClick={goNext}
+              aria-label="التالي"
+              className="hidden md:flex absolute top-1/2 -translate-y-1/2 left-0 w-10 h-10 rounded-full bg-white/10 hover:bg-accent items-center justify-center text-white transition-colors duration-200"
+            >
+              <ChevronLeft size={24} />
+            </button>
+          </>
+        )}
+
+        {/* Dots — always visible (mobile too), centered below the content */}
+        {slides.length > 1 && (
+          <div className="flex items-center justify-center gap-2 mt-12">
+            {slides.map((s, index) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => goTo(index)}
+                aria-label={`الشريحة ${index + 1}`}
+                className={`h-2 rounded-full transition-all duration-300 ${
+                  index === current
+                    ? "w-6 bg-accent"
+                    : "w-2 bg-white/30 hover:bg-white/50"
+                }`}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );
