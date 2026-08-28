@@ -19,8 +19,7 @@ export default function Login() {
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
 
-      // لو اليوزر جديد، احفظه في collection "users"
-      const userRef = doc(db, "users", user.uid);
+      const userRef = doc(db, "Users", user.uid);
       const userSnap = await getDoc(userRef);
 
       if (!userSnap.exists()) {

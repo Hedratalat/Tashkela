@@ -1,477 +1,711 @@
-import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import { Search, X, Tag } from "lucide-react";
-import { AiFillHeart, AiOutlineHeart, AiOutlineClose } from "react-icons/ai";
-import { FaShoppingCart } from "react-icons/fa";
-import Navbar from "../components/Navbar/Navbar";
+import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  collection,
+  getDocs,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  arrayUnion,
+  arrayRemove,
+} from "firebase/firestore";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from "../firebase";
-import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
+import {
+  Heart,
+  ShoppingBag,
+  Maximize2,
+  X,
+  SlidersHorizontal,
+} from "lucide-react";
 import toast from "react-hot-toast";
+import Navbar from "../components/Navbar/Navbar";
 
-const PAGE_SIZE = 9;
+const priceRanges = [
+  { label: "كل الأسعار", value: "all" },
+  { label: "0 - 50 ج.م", value: "0-50" },
+  { label: "50 - 100 ج.م", value: "50-100" },
+  { label: "100 - 200 ج.م", value: "100-200" },
+  { label: "200 - 500 ج.م", value: "200-500" },
+  { label: "500 ج.م فأكثر", value: "500+" },
+];
+
+// ── أنيميشن موحّد مع صفحة "من نحن" ──
+const fadeUp = {
+  hidden: { opacity: 0, y: 24 },
+  visible: (i = 0) => ({
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.6, delay: i * 0.1, ease: "easeOut" },
+  }),
+};
+
+// ── محتوى الفلاتر ──
+function FiltersContent({
+  search,
+  setSearch,
+  categoryFilter,
+  setCategoryFilter,
+  categories,
+  selectedPriceValue,
+  applyPrice,
+  isFiltered,
+  resetFilters,
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between mb-5">
+        <span className="font-extrabold text-base text-primary">الفلاتر</span>
+
+        {isFiltered && (
+          <button
+            onClick={resetFilters}
+            className="text-xs text-accent underline cursor-pointer"
+          >
+            إعادة تعيين
+          </button>
+        )}
+      </div>
+
+      <div className="h-px bg-border mb-5" />
+
+      <p className="text-xs font-semibold text-grayText uppercase tracking-wider mb-3">
+        بحث
+      </p>
+
+      <input
+        type="text"
+        placeholder="ابحث عن منتج..."
+        className="w-full p-3 rounded-xl border border-border bg-background text-primary shadow-sm focus:ring-2 focus:ring-accent/40 focus:border-accent outline-none mb-6 text-sm"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+
+      <div className="h-px bg-border mb-5" />
+
+      <p className="text-xs font-semibold text-grayText uppercase tracking-wider mb-3">
+        التصنيف
+      </p>
+
+      <div className="flex flex-col gap-2 mb-6">
+        <button
+          onClick={() => setCategoryFilter("الكل")}
+          className={`text-right text-sm px-4 py-3 rounded-xl border transition-all duration-200 ${
+            categoryFilter === "الكل"
+              ? "bg-accent text-white border-accent font-medium"
+              : "text-primary border-border hover:border-accent/50 hover:bg-background bg-surface"
+          }`}
+        >
+          كل التصنيفات
+        </button>
+
+        {categories.map((cat, i) => (
+          <button
+            key={i}
+            onClick={() => setCategoryFilter(cat)}
+            className={`text-right text-sm px-4 py-3 rounded-xl border transition-all duration-200 ${
+              categoryFilter === cat
+                ? "bg-accent text-white border-accent font-medium"
+                : "text-primary border-border hover:border-accent/50 hover:bg-background bg-surface"
+            }`}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
+
+      <div className="h-px bg-border mb-5" />
+
+      <p className="text-xs font-semibold text-grayText uppercase tracking-wider mb-3">
+        نطاق السعر
+      </p>
+
+      <div className="flex flex-col gap-2">
+        {priceRanges.map((item) => (
+          <button
+            key={item.value}
+            onClick={() => applyPrice(item.value)}
+            className={`w-full text-right text-sm px-4 py-3 rounded-xl border transition-all duration-200 ${
+              selectedPriceValue === item.value
+                ? "bg-accent text-white border-accent font-medium"
+                : "text-primary border-border hover:border-accent/50 hover:bg-background bg-surface"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
 
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const [query_, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState("All");
-  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("الكل");
+  const [priceFilter, setPriceFilter] = useState({
+    min: 0,
+    max: 1000000,
+  });
+  const [selectedPriceValue, setSelectedPriceValue] = useState("all");
+  const [categories, setCategories] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
 
-  // favorites state (localStorage only)
-  const [favorites, setFavorites] = useState(() => {
-    const local = JSON.parse(localStorage.getItem("favorites")) || [];
-    return local.reduce((acc, id) => ({ ...acc, [id]: true }), {});
-  });
+  const [user, setUser] = useState(null);
+  const [favorites, setFavorites] = useState([]);
+  const [cart, setCart] = useState([]);
 
-  // cart state (localStorage only)
-  const [cart, setCart] = useState(() => {
-    const local = JSON.parse(localStorage.getItem("cart")) || [];
-    return local.reduce((acc, id) => ({ ...acc, [id]: true }), {});
-  });
-
-  const fadeUp = {
-    hidden: { opacity: 0, y: 24 },
-    visible: (i = 0) => ({
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.6, delay: i * 0.1, ease: "easeOut" },
-    }),
-  };
-
-  // Fetch products from Firestore in real time
+  // ── جلب المنتجات ──
   useEffect(() => {
-    const q = query(collection(db, "Products"), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => {
-        const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const fetchProducts = async () => {
+      try {
+        setLoading(true);
+
+        const snap = await getDocs(collection(db, "Products"));
+
+        const cats = [];
+
+        const data = snap.docs.map((d) => {
+          const item = d.data();
+
+          if (item.category) cats.push(item.category);
+
+          return {
+            id: d.id,
+            ...item,
+          };
+        });
+
+        data.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+
         setProducts(data);
-        // Keep a full products cache for Cart.jsx display
-        localStorage.setItem("cartProducts", JSON.stringify(data));
+        setCategories([...new Set(cats)]);
+      } catch (error) {
+        console.error("Error fetching products:", error);
+      } finally {
         setLoading(false);
-      },
-      (error) => {
-        console.error(error);
-        setLoading(false);
-      },
-    );
-    return () => unsub();
+      }
+    };
+
+    fetchProducts();
   }, []);
 
-  // Keep favorites/cart in sync if changed from another page/component
   useEffect(() => {
-    const syncFavorites = () => {
-      const local = JSON.parse(localStorage.getItem("favorites")) || [];
-      setFavorites(local.reduce((acc, id) => ({ ...acc, [id]: true }), {}));
-    };
-    const syncCart = () => {
-      const local = JSON.parse(localStorage.getItem("cart")) || [];
-      setCart(local.reduce((acc, id) => ({ ...acc, [id]: true }), {}));
-    };
-
-    window.addEventListener("favoritesUpdated", syncFavorites);
-    window.addEventListener("cartUpdated", syncCart);
-    return () => {
-      window.removeEventListener("favoritesUpdated", syncFavorites);
-      window.removeEventListener("cartUpdated", syncCart);
-    };
-  }, []);
-
-  // Categories built dynamically from the actual products
-  const categories = useMemo(() => {
-    const set = new Set(
-      products.map((p) => p.category).filter((c) => c && c.trim() !== ""),
-    );
-    return ["All", ...Array.from(set)];
-  }, [products]);
-
-  const filteredProducts = useMemo(() => {
-    return products.filter((product) => {
-      const matchesCategory =
-        activeCategory === "All" || product.category === activeCategory;
-      const matchesQuery = product.name
-        ?.toLowerCase()
-        .includes(query_.trim().toLowerCase());
-      return matchesCategory && matchesQuery;
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
     });
-  }, [products, query_, activeCategory]);
+  }, [currentPage]);
 
-  // Pagination
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredProducts.length / PAGE_SIZE),
-  );
-
+  // ── تتبع حالة تسجيل الدخول ──
   useEffect(() => {
-    setCurrentPage(1);
-  }, [query_, activeCategory]);
+    const auth = getAuth();
 
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser || null);
+
+      if (!currentUser) {
+        setFavorites([]);
+        setCart([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // ── قراءة الفيفوريت/الكارت ──
   useEffect(() => {
-    if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [totalPages, currentPage]);
+    if (!user) return;
 
-  const paginatedProducts = filteredProducts.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE,
-  );
+    const userRef = doc(db, "Users", user.uid);
 
-  // Toggle favorite (localStorage only)
-  const toggleFavorite = (id, name) => {
-    const localFav = JSON.parse(localStorage.getItem("favorites")) || [];
-    const isFav = localFav.includes(id);
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
 
-    const updated = isFav
-      ? localFav.filter((item) => item !== id)
-      : [...localFav, id];
+        setFavorites(data.favorites || []);
+        setCart(data.cart || []);
+      } else {
+        setFavorites([]);
+        setCart([]);
+      }
+    });
 
-    localStorage.setItem("favorites", JSON.stringify(updated));
-    window.dispatchEvent(new Event("favoritesUpdated"));
+    return () => unsubscribe();
+  }, [user]);
 
-    setFavorites((prev) => ({ ...prev, [id]: !isFav }));
+  // ── الفيفوريت ──
+  const toggleFavorite = async (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
 
-    if (!isFav) {
-      toast.success(`Added ${name} to favorites`);
-    } else {
-      toast(`Removed ${name} from favorites`, {
-        icon: <AiOutlineClose color="red" size={20} />,
-      });
-    }
-  };
-
-  // Toggle cart (localStorage only)
-  const toggleCart = (id, name, isOutOfStock) => {
-    if (isOutOfStock) {
-      toast.error("This product is out of stock");
+    if (!user) {
+      toast.error("سجل دخول الأول عشان تضيف للمفضلة");
       return;
     }
 
-    const localCart = JSON.parse(localStorage.getItem("cart")) || [];
-    const inCart = localCart.includes(id);
+    const isFav = favorites.includes(product.id);
+    const userRef = doc(db, "Users", user.uid);
 
-    const updatedCart = inCart
-      ? localCart.filter((item) => item !== id)
-      : [...localCart, id];
+    try {
+      await setDoc(
+        userRef,
+        {
+          favorites: isFav ? arrayRemove(product.id) : arrayUnion(product.id),
+        },
+        { merge: true },
+      );
 
-    localStorage.setItem("cart", JSON.stringify(updatedCart));
-
-    // Handle quantities alongside the cart list
-    const quantities = JSON.parse(localStorage.getItem("cartQuantities")) || {};
-    if (inCart) {
-      delete quantities[id];
-    } else {
-      quantities[id] = 1;
+      toast.success(
+        isFav
+          ? `تم إزالة ${product.name} من المفضلة`
+          : `تم إضافة ${product.name} للمفضلة`,
+      );
+    } catch (error) {
+      console.error("Error updating favorites:", error);
+      toast.error("حصل خطأ، حاول تاني");
     }
-    localStorage.setItem("cartQuantities", JSON.stringify(quantities));
+  };
 
-    window.dispatchEvent(new Event("cartUpdated"));
+  // ── السلة ──
+  const toggleCart = async (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
 
-    setCart((prev) => ({ ...prev, [id]: !inCart }));
+    if (!user) {
+      toast.error("سجل دخول الأول عشان تضيف للسلة");
+      return;
+    }
 
-    if (!inCart) {
-      toast.success(`Added ${name} to cart`);
+    const inCart = cart.includes(product.id);
+    const userRef = doc(db, "Users", user.uid);
+
+    try {
+      await setDoc(
+        userRef,
+        {
+          cart: inCart ? arrayRemove(product.id) : arrayUnion(product.id),
+        },
+        { merge: true },
+      );
+
+      toast.success(
+        inCart
+          ? `تم إزالة ${product.name} من السلة`
+          : `تم إضافة ${product.name} للسلة`,
+      );
+    } catch (error) {
+      console.error("Error updating cart:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
+  };
+
+  // ── الفلاتر ──
+  const applyPrice = (val) => {
+    setSelectedPriceValue(val);
+
+    if (val === "all") {
+      setPriceFilter({
+        min: 0,
+        max: 1000000,
+      });
+    } else if (val === "500+") {
+      setPriceFilter({
+        min: 500,
+        max: 1000000,
+      });
     } else {
-      toast(`Removed ${name} from cart`, {
-        icon: <AiOutlineClose color="red" size={20} />,
+      const [min, max] = val.split("-").map(Number);
+
+      setPriceFilter({
+        min,
+        max,
       });
     }
+  };
+
+  const resetFilters = () => {
+    setSearch("");
+    setCategoryFilter("الكل");
+    setSelectedPriceValue("all");
+
+    setPriceFilter({
+      min: 0,
+      max: 1000000,
+    });
+  };
+
+  const isFiltered =
+    search !== "" || categoryFilter !== "الكل" || selectedPriceValue !== "all";
+
+  const getEffectivePrice = (p) =>
+    p.discountPrice ? p.discountPrice : p.price;
+
+  const filteredProducts = products.filter((product) => {
+    const matchSearch = product.name
+      ?.toLowerCase()
+      .includes(search.toLowerCase());
+
+    const matchCategory =
+      categoryFilter === "الكل" || product.category === categoryFilter;
+
+    const price = getEffectivePrice(product);
+
+    const matchPrice = price >= priceFilter.min && price <= priceFilter.max;
+
+    return matchSearch && matchCategory && matchPrice;
+  });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, categoryFilter, priceFilter]);
+
+  const productsPerPage = 9;
+
+  const totalPages = Math.ceil(filteredProducts.length / productsPerPage);
+
+  const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
+
+  const startIndex = (currentPage - 1) * productsPerPage;
+
+  const currentProducts = filteredProducts.slice(
+    startIndex,
+    startIndex + productsPerPage,
+  );
+
+  const filtersProps = {
+    search,
+    setSearch,
+    categoryFilter,
+    setCategoryFilter,
+    categories,
+    selectedPriceValue,
+    applyPrice,
+    isFiltered,
+    resetFilters,
   };
 
   return (
     <>
       <Navbar />
 
-      <main className="min-h-screen bg-background font-sans">
-        {/* ---------- Header ---------- */}
-        <section className="bg-background py-12">
-          <div className="max-w-3xl mx-auto px-6 text-center">
-            <motion.p
-              initial="hidden"
-              animate="visible"
-              custom={0}
-              variants={fadeUp}
-              className="text-sm font-semibold text-accent mb-4"
-            >
-              Shop
-            </motion.p>
-
-            <motion.h2
-              initial="hidden"
-              animate="visible"
-              custom={1}
-              variants={fadeUp}
-              className="text-4xl md:text-5xl font-extrabold tracking-tighter text-primary leading-[1.08]"
-            >
-              Find the Perfect Pair for You.
-            </motion.h2>
-
-            <motion.p
-              initial="hidden"
-              animate="visible"
-              custom={2}
-              variants={fadeUp}
-              className="mt-6 text-base md:text-lg text-grayText leading-relaxed max-w-xl mx-auto"
-            >
-              Every model tried, checked, and approved before it reaches the
-              shelf.
-            </motion.p>
-          </div>
-        </section>
-
-        {/* ---------- Search + Categories ---------- */}
-        <section className="px-6 pb-8">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="max-w-5xl mx-auto flex flex-col md:flex-row gap-4 md:items-center md:justify-between"
-          >
-            <div className="relative w-full md:max-w-xs">
-              <Search
-                size={18}
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-grayText"
-              />
-              <input
-                type="text"
-                value={query_}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search sneakers..."
-                className="w-full pl-11 pr-4 py-3 rounded-xl border border-border bg-surface text-primary placeholder:text-grayText/70 outline-none transition-all duration-200 focus:ring-2 focus:ring-accent/30 focus:border-accent"
-              />
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {categories.map((category) => (
-                <button
-                  key={category}
-                  onClick={() => setActiveCategory(category)}
-                  className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors duration-200 ${
-                    activeCategory === category
-                      ? "bg-primary text-white border-primary"
-                      : "bg-surface text-grayText border-border hover:text-primary hover:border-primary"
-                  }`}
-                >
-                  {category}
-                </button>
-              ))}
-            </div>
-          </motion.div>
-        </section>
-
-        {/* ---------- Product Grid ---------- */}
-        <section className="px-6 pb-24">
-          <div className="max-w-5xl mx-auto">
-            {loading ? (
-              <div className="flex flex-col items-center justify-center py-24 gap-4">
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{
-                    duration: 0.8,
-                    repeat: Infinity,
-                    ease: "linear",
-                  }}
-                  className="w-10 h-10 rounded-full border-4 border-border border-t-accent"
-                />
-                <p className="text-grayText text-sm">Loading products...</p>
-              </div>
-            ) : filteredProducts.length === 0 ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-center py-20"
+      <section dir="rtl" className="bg-background min-h-screen font-sans">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          {/* العنوان - نفس بادينج وأنيميشن صفحة "من نحن" بالظبط */}
+          <div className="py-4 md:py-10">
+            <div className="max-w-3xl mx-auto text-center">
+              <motion.p
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={0}
+                variants={fadeUp}
+                className="text-sm font-semibold text-accent mb-4"
               >
-                <p className="text-primary font-semibold mb-1">
-                  No sneakers found
-                </p>
-                <p className="text-grayText text-sm">
-                  Try a different name or category.
-                </p>
-              </motion.div>
+                تسوق
+              </motion.p>
+              <motion.h2
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={1}
+                variants={fadeUp}
+                className="text-4xl md:text-5xl font-extrabold tracking-tight text-primary leading-[1.15]"
+              >
+                كل اللي محتاجه، في مكان واحد.
+              </motion.h2>
+              <motion.p
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={2}
+                variants={fadeUp}
+                className="mt-6 text-base md:text-lg text-grayText leading-relaxed max-w-xl mx-auto"
+              >
+                اكتشف تشكيلة واسعة من المنتجات المختارة بعناية من موردين
+                موثوقين، بأفضل الأسعار وأسهل طريقة للتسوق.
+              </motion.p>
+            </div>
+          </div>
+
+          {/* باقي المحتوى - بادينج سفلي منفصل عن العنوان */}
+          <div className="pb-9 sm:pb-16">
+            {loading ? (
+              <div className="flex justify-center items-center py-32">
+                <div className="w-10 h-10 border-4 border-accent/30 border-t-accent rounded-full animate-spin" />
+              </div>
             ) : (
               <>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <AnimatePresence mode="popLayout">
-                    {paginatedProducts.map((product, i) => (
-                      <motion.div
-                        key={product.id}
-                        custom={i}
-                        initial="hidden"
-                        animate="visible"
-                        exit={{ opacity: 0, y: -20 }}
-                        variants={{
-                          hidden: { opacity: 0, y: 30 },
-                          visible: (i) => ({
-                            opacity: 1,
-                            y: 0,
-                            transition: {
-                              duration: 0.5,
-                              delay: (i % 3) * 0.1,
-                              ease: "easeOut",
-                            },
-                          }),
-                          hover: {
-                            y: -6,
-                            boxShadow: "0 12px 30px -10px rgba(0,0,0,0.12)",
-                            transition: {
-                              type: "spring",
-                              stiffness: 300,
-                              damping: 20,
-                            },
-                          },
-                        }}
-                        whileHover="hover"
-                        className="relative bg-surface border border-border rounded-2xl overflow-hidden"
-                      >
-                        <div className="relative w-full aspect-square overflow-hidden bg-background">
-                          <button
-                            onClick={() => setSelectedProduct(product)}
-                            className="w-full h-full block"
-                            aria-label={`Enlarge ${product.name}`}
-                          >
-                            <motion.img
-                              src={product.imageUrl}
-                              alt={product.name}
-                              whileHover={{ scale: 1.06 }}
-                              transition={{ duration: 0.4, ease: "easeOut" }}
-                              className={`w-full h-full object-cover cursor-zoom-in ${
-                                product.outOfStock ? "opacity-60 grayscale" : ""
-                              }`}
-                            />
-                          </button>
-
-                          {product.outOfStock && (
-                            <div className="absolute inset-0 bg-black/60 flex items-center justify-center pointer-events-none">
-                              <div className="bg-danger text-white px-5 py-2.5 rounded-full font-bold text-sm shadow-lg transform rotate-[-15deg]">
-                                OUT OF STOCK
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Favorite Heart Button */}
-                          <button
-                            onClick={() =>
-                              toggleFavorite(product.id, product.name)
-                            }
-                            aria-label="Toggle favorite"
-                            className="absolute top-3 right-3 bg-surface/95 p-2 rounded-full shadow hover:scale-105 transition z-10"
-                          >
-                            {favorites[product.id] ? (
-                              <AiFillHeart className="h-6 w-6 text-accent" />
-                            ) : (
-                              <AiOutlineHeart className="h-6 w-6 text-primary" />
-                            )}
-                          </button>
-                        </div>
-
-                        <div className="p-5">
-                          <div className="flex items-center gap-1.5 text-xs font-semibold text-accent mb-2">
-                            <Tag size={12} />
-                            {product.category}
-                          </div>
-                          <h3 className="text-base font-bold text-primary mb-1">
-                            {product.name}
-                          </h3>
-                          <p className="text-sm text-grayText leading-relaxed mb-4 line-clamp-2">
-                            {product.description}
-                          </p>
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <p className="text-lg font-extrabold text-primary">
-                                {Number(product.price).toLocaleString()} EGP
-                              </p>
-                              {product.discountPrice && (
-                                <p className="text-sm text-grayText line-through">
-                                  {Number(
-                                    product.discountPrice,
-                                  ).toLocaleString()}{" "}
-                                  EGP
-                                </p>
-                              )}
-                            </div>
-
-                            <button
-                              onClick={() =>
-                                toggleCart(
-                                  product.id,
-                                  product.name,
-                                  product.outOfStock,
-                                )
-                              }
-                              disabled={product.outOfStock}
-                              className={`flex items-center justify-center gap-1 py-2 px-3 rounded-lg font-semibold text-sm transition shadow ${
-                                product.outOfStock
-                                  ? "bg-grayText/40 text-white cursor-not-allowed"
-                                  : cart[product.id]
-                                    ? "bg-danger hover:bg-danger/90 text-white"
-                                    : "bg-primary hover:bg-primary-hover text-white"
-                              }`}
-                            >
-                              {product.outOfStock ? (
-                                "Out of Stock"
-                              ) : cart[product.id] ? (
-                                <>
-                                  Remove <FaShoppingCart size={16} />
-                                </>
-                              ) : (
-                                <>
-                                  Add <FaShoppingCart size={16} />
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
+                {/* زرار الفلاتر على الموبايل */}
+                <div className="flex justify-end mb-4 xl:hidden">
+                  <button
+                    onClick={() => setDrawerOpen(true)}
+                    className="flex items-center gap-2 bg-surface border border-border text-primary text-sm font-medium px-4 py-2.5 rounded-xl shadow-sm"
+                  >
+                    <SlidersHorizontal size={16} />
+                    الفلاتر
+                    {isFiltered && (
+                      <span className="w-2 h-2 rounded-full bg-accent" />
+                    )}
+                  </button>
                 </div>
 
-                {/* ---------- Pagination ---------- */}
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-center gap-2 mt-12">
-                    <button
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                      className="px-4 py-2 rounded-full border border-border bg-surface text-primary text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:border-primary transition-colors duration-200"
-                    >
-                      Previous
-                    </button>
+                <div className="flex gap-8 items-start">
+                  {/* Sidebar الديسكتوب */}
+                  <aside className="hidden xl:block w-64 shrink-0 bg-surface rounded-2xl border border-border p-6 sticky top-6 shadow-sm">
+                    <FiltersContent {...filtersProps} />
+                  </aside>
 
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(
-                      (page) => (
+                  <div className="flex-1 min-w-0 flex flex-col min-h-[calc(100vh-320px)]">
+                    {currentProducts.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-20 text-center">
+                        <h3 className="text-xl font-bold text-primary mb-2">
+                          لا توجد منتجات
+                        </h3>
+
+                        <p className="text-grayText max-w-xs">
+                          جرب تغيير البحث أو الفلاتر لعرض منتجات أكتر.
+                        </p>
+
                         <button
-                          key={page}
-                          onClick={() => setCurrentPage(page)}
-                          className={`w-9 h-9 rounded-full text-sm font-semibold transition-colors duration-200 ${
-                            currentPage === page
-                              ? "bg-primary text-white border border-primary"
-                              : "bg-surface border border-border text-primary hover:border-primary"
+                          onClick={resetFilters}
+                          className="mt-4 px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-medium hover:bg-primary-hover transition-colors"
+                        >
+                          إعادة تعيين الفلاتر
+                        </button>
+                      </div>
+                    ) : (
+                      /* ── تم تقليل الأعمدة إلى 3 في الديسكتوب لتكبير حجم الكروت ── */
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {currentProducts.map((product) => {
+                          const isFav = favorites.includes(product.id);
+                          const inCart = cart.includes(product.id);
+
+                          return (
+                            <motion.div
+                              key={product.id}
+                              initial={{
+                                opacity: 0,
+                                y: 20,
+                              }}
+                              animate={{
+                                opacity: 1,
+                                y: 0,
+                              }}
+                              className="bg-surface border border-border rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col"
+                            >
+                              <div
+                                onClick={() => setSelectedProduct(product)}
+                                className="relative aspect-square bg-background cursor-pointer overflow-hidden"
+                              >
+                                <img
+                                  src={product.imageUrl}
+                                  alt={product.name}
+                                  className="w-full h-full object-contain p-4"
+                                />
+
+                                <div className="absolute top-3 left-3 flex flex-col gap-2">
+                                  <button
+                                    onClick={(e) => toggleFavorite(e, product)}
+                                    className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                                  >
+                                    <Heart
+                                      size={18}
+                                      className={
+                                        isFav
+                                          ? "fill-danger text-danger"
+                                          : "text-grayText"
+                                      }
+                                    />
+                                  </button>
+
+                                  <button
+                                    onClick={(e) => toggleCart(e, product)}
+                                    className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                                  >
+                                    <ShoppingBag
+                                      size={17}
+                                      className={
+                                        inCart ? "text-accent" : "text-grayText"
+                                      }
+                                    />
+                                  </button>
+
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedProduct(product);
+                                    }}
+                                    className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                                  >
+                                    <Maximize2
+                                      size={17}
+                                      className="text-grayText"
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="p-4 flex flex-col flex-1">
+                                <h3 className="font-bold text-primary text-lg line-clamp-2">
+                                  {product.name}
+                                </h3>
+
+                                <div className="flex items-center gap-2 mt-1 mb-4">
+                                  {product.discountPrice ? (
+                                    <>
+                                      <span className="text-grayText text-base line-through">
+                                        {product.price} ج.م
+                                      </span>
+
+                                      <span className="text-primary font-extrabold text-xl">
+                                        {product.discountPrice} ج.م
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span className="text-primary font-extrabold text-xl">
+                                      {product.price} ج.م
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="border-t border-border pt-3 flex items-center justify-between gap-2 h-7 mt-auto">
+                                  <span className="text-grayText text-sm font-semibold truncate">
+                                    {product.shopName}
+                                  </span>
+
+                                  {product.category && (
+                                    <span className="text-accent text-sm font-semibold shrink-0">
+                                      {product.category}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Pagination */}
+                    {currentProducts.length > 0 && totalPages > 1 && (
+                      <div className="flex justify-center mt-auto pt-8 gap-3 items-center flex-wrap">
+                        <button
+                          onClick={() =>
+                            currentPage > 1 && setCurrentPage(currentPage - 1)
+                          }
+                          disabled={currentPage === 1}
+                          className={`px-4 py-2 rounded-lg border ${
+                            currentPage === 1
+                              ? "bg-border/40 text-grayText cursor-not-allowed border-border"
+                              : "bg-surface text-primary border-border hover:bg-accent hover:text-white hover:border-accent"
                           }`}
                         >
-                          {page}
+                          السابق
                         </button>
-                      ),
+                        {pages.map((page) => (
+                          <button
+                            key={page}
+                            onClick={() => setCurrentPage(page)}
+                            className={`px-4 py-2 rounded-lg border ${
+                              page === currentPage
+                                ? "bg-accent text-white border-accent"
+                                : "bg-surface text-primary border-border hover:bg-accent hover:text-white hover:border-accent"
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() =>
+                            currentPage < totalPages &&
+                            setCurrentPage(currentPage + 1)
+                          }
+                          disabled={currentPage >= totalPages}
+                          className={`px-4 py-2 rounded-lg border ${
+                            currentPage >= totalPages
+                              ? "bg-border/40 text-grayText cursor-not-allowed border-border"
+                              : "bg-surface text-primary border-border hover:bg-accent hover:text-white hover:border-accent"
+                          }`}
+                        >
+                          التالي
+                        </button>
+                      </div>
                     )}
-
-                    <button
-                      onClick={() =>
-                        setCurrentPage((p) => Math.min(totalPages, p + 1))
-                      }
-                      disabled={currentPage === totalPages}
-                      className="px-4 py-2 rounded-full border border-border bg-surface text-primary text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:border-primary transition-colors duration-200"
-                    >
-                      Next
-                    </button>
                   </div>
-                )}
+                </div>
               </>
             )}
           </div>
-        </section>
-      </main>
+        </div>
+      </section>
 
-      {/* ---------- Image Lightbox ---------- */}
+      {/* Drawer الفلاتر على الموبايل */}
+      <AnimatePresence>
+        {drawerOpen && (
+          <>
+            <motion.div
+              key="overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setDrawerOpen(false)}
+              className="fixed inset-0 bg-primary/40 z-40 xl:hidden"
+            />
+
+            <motion.div
+              key="drawer"
+              dir="rtl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{
+                type: "spring",
+                damping: 28,
+                stiffness: 300,
+              }}
+              className="fixed bottom-0 left-0 right-0 z-50 xl:hidden bg-surface rounded-t-[24px] p-6 max-h-[80vh] overflow-y-auto"
+            >
+              <button
+                onClick={() => setDrawerOpen(false)}
+                className="absolute top-4 left-4 w-8 h-8 flex items-center justify-center text-primary rounded-full hover:bg-background transition"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="w-10 h-1 bg-border rounded-full mx-auto mb-5" />
+
+              <FiltersContent {...filtersProps} />
+
+              <button
+                onClick={() => setDrawerOpen(false)}
+                className="w-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold py-3.5 rounded-xl mt-4 transition-colors"
+              >
+                عرض {filteredProducts.length} نتيجة
+              </button>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* بوب أب تكبير المنتج */}
       <AnimatePresence>
         {selectedProduct && (
           <motion.div
@@ -479,51 +713,85 @@ export default function Products() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setSelectedProduct(null)}
-            className="fixed inset-0 z-50 bg-primary/80 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
           >
             <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              transition={{ type: "spring", stiffness: 260, damping: 24 }}
+              dir="rtl"
+              initial={{
+                opacity: 0,
+                scale: 0.95,
+                y: 20,
+              }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                y: 0,
+              }}
+              exit={{
+                opacity: 0,
+                scale: 0.95,
+                y: 20,
+              }}
               onClick={(e) => e.stopPropagation()}
-              className="relative bg-surface rounded-2xl overflow-hidden max-w-lg w-full"
+              className="bg-surface rounded-2xl overflow-hidden max-w-2xl w-full max-h-[90vh] overflow-y-auto relative shadow-lg"
             >
               <button
                 onClick={() => setSelectedProduct(null)}
-                aria-label="Close"
-                className="absolute top-3 right-3 z-10 p-2 rounded-full bg-surface/90 text-primary hover:bg-primary hover:text-white transition-colors duration-200"
+                className="absolute top-3 left-3 z-10 w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
               >
-                <X size={18} />
+                <X size={18} className="text-primary" />
               </button>
 
-              <img
-                src={selectedProduct.imageUrl}
-                alt={selectedProduct.name}
-                className="w-full aspect-square object-cover"
-              />
-
-              <div className="p-6">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-accent mb-2">
-                  <Tag size={12} />
-                  {selectedProduct.category}
+              <div className="grid grid-cols-1 sm:grid-cols-2">
+                <div className="bg-background flex items-center justify-center p-6">
+                  <img
+                    src={selectedProduct.imageUrl}
+                    alt={selectedProduct.name}
+                    className="w-full h-full object-contain max-h-80"
+                  />
                 </div>
-                <h3 className="text-xl font-bold text-primary mb-2">
-                  {selectedProduct.name}
-                </h3>
-                <p className="text-sm text-grayText leading-relaxed mb-4">
-                  {selectedProduct.description}
-                </p>
-                <div className="flex items-center gap-2">
-                  <p className="text-lg font-extrabold text-primary">
-                    {Number(selectedProduct.price).toLocaleString()} EGP
-                  </p>
-                  {selectedProduct.discountPrice && (
-                    <p className="text-sm text-grayText line-through">
-                      {Number(selectedProduct.discountPrice).toLocaleString()}{" "}
-                      EGP
-                    </p>
+
+                <div className="p-6 flex flex-col">
+                  {selectedProduct.category && (
+                    <span className="inline-block w-fit bg-accent/10 text-accent text-xs font-bold px-2.5 py-1 rounded-full mb-3">
+                      {selectedProduct.category}
+                    </span>
                   )}
+
+                  <h3 className="text-xl font-extrabold text-primary mb-2">
+                    {selectedProduct.name}
+                  </h3>
+
+                  <div className="flex items-center gap-2 mb-4">
+                    {selectedProduct.discountPrice ? (
+                      <>
+                        <span className="text-grayText text-base line-through">
+                          {selectedProduct.price} ج.م
+                        </span>
+
+                        <span className="text-primary font-extrabold text-xl">
+                          {selectedProduct.discountPrice} ج.م
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-primary font-extrabold text-xl">
+                        {selectedProduct.price} ج.م
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-grayText text-sm leading-relaxed flex-1">
+                    {selectedProduct.description}
+                  </p>
+
+                  <div className="border-t border-border mt-4 pt-4">
+                    <span className="text-sm text-grayText">
+                      البائع:{" "}
+                      <span className="font-bold text-primary">
+                        {selectedProduct.shopName}
+                      </span>
+                    </span>
+                  </div>
                 </div>
               </div>
             </motion.div>

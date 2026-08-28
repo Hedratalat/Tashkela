@@ -98,7 +98,7 @@ export default function AboutUs() {
               variants={fadeUp}
               className="text-4xl md:text-5xl font-extrabold tracking-tight text-primary leading-[1.15]"
             >
-              كل اللي محتاجه، في مكان واحد.
+              وجهتك لتجربة تسوق أفضل.
             </motion.h2>
 
             <motion.p

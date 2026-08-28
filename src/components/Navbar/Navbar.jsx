@@ -17,7 +17,7 @@ import { auth } from "../../firebase";
 const navLinks = [
   { label: "الرئيسية", path: "/" },
   { label: "من نحن", path: "/about" },
-  { label: "المتجر", path: "/shop" },
+  { label: "المتجر", path: "/products" },
   { label: "تتبع الطلب", path: "/track-order" },
   { label: "تواصل معنا", path: "/contact" },
 ];
