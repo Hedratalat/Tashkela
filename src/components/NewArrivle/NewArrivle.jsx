@@ -1,15 +1,30 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  onSnapshot,
+  doc,
+  setDoc,
+  arrayRemove,
+  arrayUnion,
+} from "firebase/firestore";
 import { db } from "../../firebase";
 import { Heart, ShoppingBag, Maximize2, X } from "lucide-react";
+import toast from "react-hot-toast";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 
 export default function NewArrivle() {
   const [products, setProducts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [likedIds, setLikedIds] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
+
+  const [user, setUser] = useState(null);
+  const [favorites, setFavorites] = useState([]);
+  const [cart, setCart] = useState([]);
 
   useEffect(() => {
     const fetchProducts = async () => {
@@ -40,14 +55,105 @@ export default function NewArrivle() {
     fetchProducts();
   }, []);
 
-  const toggleLike = (e, id) => {
+  // ── تتبع حالة تسجيل الدخول ──
+  useEffect(() => {
+    const auth = getAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser || null);
+
+      if (!currentUser) {
+        setFavorites([]);
+        setCart([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // ── قراءة الفيفوريت/الكارت لحظيًا (متزامنة مع باقي الموقع) ──
+  useEffect(() => {
+    if (!user) return;
+
+    const userRef = doc(db, "Users", user.uid);
+
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+
+        setFavorites(data.favorites || []);
+        setCart(data.cart || []);
+      } else {
+        setFavorites([]);
+        setCart([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const toggleFavorite = async (e, product) => {
+    e.preventDefault();
     e.stopPropagation();
 
-    setLikedIds((prev) =>
-      prev.includes(id)
-        ? prev.filter((likedId) => likedId !== id)
-        : [...prev, id],
-    );
+    if (!user) {
+      toast.error("سجل دخول الأول عشان تضيف للمفضلة");
+      return;
+    }
+
+    const isFav = favorites.includes(product.id);
+    const userRef = doc(db, "Users", user.uid);
+
+    try {
+      await setDoc(
+        userRef,
+        {
+          favorites: isFav ? arrayRemove(product.id) : arrayUnion(product.id),
+        },
+        { merge: true },
+      );
+
+      toast.success(
+        isFav
+          ? `تم إزالة ${product.name} من المفضلة`
+          : `تم إضافة ${product.name} للمفضلة`,
+      );
+    } catch (error) {
+      console.error("Error updating favorites:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
+  };
+
+  const toggleCart = async (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!user) {
+      toast.error("سجل دخول الأول عشان تضيف للسلة");
+      return;
+    }
+
+    const inCart = cart.includes(product.id);
+    const userRef = doc(db, "Users", user.uid);
+
+    try {
+      await setDoc(
+        userRef,
+        {
+          cart: inCart ? arrayRemove(product.id) : arrayUnion(product.id),
+        },
+        { merge: true },
+      );
+
+      toast.success(
+        inCart
+          ? `تم إزالة ${product.name} من السلة`
+          : `تم إضافة ${product.name} للسلة`,
+      );
+    } catch (error) {
+      console.error("Error updating cart:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
   };
 
   return (
@@ -82,7 +188,8 @@ export default function NewArrivle() {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 gap-5">
               {products.slice(0, 8).map((product) => {
-                const isLiked = likedIds.includes(product.id);
+                const isFav = favorites.includes(product.id);
+                const inCart = cart.includes(product.id);
 
                 return (
                   <motion.div
@@ -105,13 +212,13 @@ export default function NewArrivle() {
                       {/* أيقونات القلب و الشوب و الـ Expand */}
                       <div className="absolute top-3 left-3 flex flex-col gap-2">
                         <button
-                          onClick={(e) => toggleLike(e, product.id)}
+                          onClick={(e) => toggleFavorite(e, product)}
                           className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
                         >
                           <Heart
                             size={18}
                             className={
-                              isLiked
+                              isFav
                                 ? "fill-danger text-danger"
                                 : "text-grayText"
                             }
@@ -119,12 +226,14 @@ export default function NewArrivle() {
                         </button>
 
                         <button
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) => toggleCart(e, product)}
                           className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
                         >
-                          <ShoppingBag size={17} className="text-grayText" />
+                          <ShoppingBag
+                            size={17}
+                            className={inCart ? "text-accent" : "text-grayText"}
+                          />
                         </button>
-
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

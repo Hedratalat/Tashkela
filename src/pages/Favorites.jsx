@@ -1,319 +1,570 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { AiFillHeart, AiOutlineClose } from "react-icons/ai";
-import { collection, onSnapshot } from "firebase/firestore";
+import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  doc,
+  onSnapshot,
+  getDocs,
+  collection,
+  query,
+  where,
+  documentId,
+  setDoc,
+  arrayUnion,
+  arrayRemove,
+} from "firebase/firestore";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from "../firebase";
-import Navbar from "../components/Navbar/Navbar";
+import { Heart, ShoppingBag, Maximize2, X, HeartOff } from "lucide-react";
 import toast from "react-hot-toast";
-import { FaShoppingCart } from "react-icons/fa";
+import Navbar from "../components/Navbar/Navbar";
 
 export default function Favorites() {
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  const [favoriteIds, setFavoriteIds] = useState([]);
+  const [cart, setCart] = useState([]);
+
   const [products, setProducts] = useState([]);
-  const [favProducts, setFavProducts] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [selectedProduct, setSelectedProduct] = useState(null);
+
+  // ── Pagination ──
   const [currentPage, setCurrentPage] = useState(1);
-  const [cart, setCart] = useState(() => {
-    const localCart = JSON.parse(localStorage.getItem("cart")) || [];
-    return localCart.reduce((acc, id) => ({ ...acc, [id]: true }), {});
-  });
+  const productsPerPage = 8;
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   useEffect(() => {
     window.scrollTo({
       top: 0,
       behavior: "smooth",
     });
-  }, []);
+  }, [currentPage]);
 
-  // Fetch products (for display data: name, image, price...)
+  // ── تتبع حالة تسجيل الدخول ──
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "Products"), (snap) => {
-      const data = snap.docs.map((doc) => ({
-        id: doc.id,
-        name: doc.data().name,
-        image: doc.data().imageUrl,
-        price: doc.data().discountPrice
-          ? doc.data().discountPrice
-          : doc.data().price,
-        realPrice: doc.data().price,
-        category: doc.data().category,
-        details: doc.data().description,
-        outOfStock: doc.data().outOfStock || false,
-      }));
-      setProducts(data);
+    const auth = getAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser || null);
+      setAuthChecked(true);
+
+      if (!currentUser) {
+        setFavoriteIds([]);
+        setCart([]);
+        setProducts([]);
+        setIsLoading(false);
+      }
     });
 
-    return () => unsub();
+    return () => unsubscribe();
   }, []);
 
-  // Build favorites list purely from localStorage
-  const loadFavorites = (allProducts) => {
-    const localFav = JSON.parse(localStorage.getItem("favorites")) || [];
-    const filtered = allProducts.filter((p) => localFav.includes(p.id));
-    setFavProducts(filtered);
-  };
-
+  // ── قراءة الفيفوريت/الكارت لحظيًا (متزامنة مع باقي الموقع) ──
   useEffect(() => {
-    loadFavorites(products);
-  }, [products]);
+    if (!user) return;
 
-  // Stay in sync if favorites change from another page (e.g. Products.jsx)
-  useEffect(() => {
-    const syncFavorites = () => loadFavorites(products);
-    window.addEventListener("favoritesUpdated", syncFavorites);
-    return () => window.removeEventListener("favoritesUpdated", syncFavorites);
-  }, [products]);
+    const userRef = doc(db, "Users", user.uid);
 
-  // Remove from favorites (localStorage only)
-  const removeFavorite = (id) => {
-    let localFav = JSON.parse(localStorage.getItem("favorites")) || [];
-    localFav = localFav.filter((item) => item !== id);
-    localStorage.setItem("favorites", JSON.stringify(localFav));
-    window.dispatchEvent(new Event("favoritesUpdated"));
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
 
-    setFavProducts((prev) => prev.filter((p) => p.id !== id));
-
-    toast(`Removed from favorites`, {
-      icon: <AiOutlineClose color="red" size={20} />,
+        setFavoriteIds(data.favorites || []);
+        setCart(data.cart || []);
+      } else {
+        setFavoriteIds([]);
+        setCart([]);
+      }
     });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // ── جلب بيانات المنتجات المفضلة بناءً على الـ IDs ──
+  useEffect(() => {
+    const fetchFavoriteProducts = async () => {
+      if (!authChecked) return;
+
+      if (favoriteIds.length === 0) {
+        setProducts([]);
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        // Firestore بيحدد حد أقصى 30 عنصر في "in" query، فبنقسمهم على دفعات
+        const chunks = [];
+
+        for (let i = 0; i < favoriteIds.length; i += 30) {
+          chunks.push(favoriteIds.slice(i, i + 30));
+        }
+
+        const results = await Promise.all(
+          chunks.map(async (chunk) => {
+            const q = query(
+              collection(db, "Products"),
+              where(documentId(), "in", chunk),
+            );
+
+            const snap = await getDocs(q);
+
+            return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          }),
+        );
+
+        const merged = results.flat();
+
+        // ترتيب المنتجات حسب ترتيب إضافتها للمفضلة (الأحدث فوق)
+        const ordered = [...favoriteIds]
+          .reverse()
+          .map((id) => merged.find((p) => p.id === id))
+          .filter(Boolean);
+
+        setProducts(ordered);
+      } catch (error) {
+        console.error("Error fetching favorite products:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchFavoriteProducts();
+  }, [favoriteIds, authChecked]);
+
+  // ── إزالة من المفضلة (بتتحدث في Firebase وبالتالي في كل صفحات الموقع) ──
+  const removeFavorite = async (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!user) return;
+
+    const userRef = doc(db, "Users", user.uid);
+
+    try {
+      await setDoc(
+        userRef,
+        { favorites: arrayRemove(product.id) },
+        { merge: true },
+      );
+
+      toast.success(`تم إزالة ${product.name} من المفضلة`);
+    } catch (error) {
+      console.error("Error removing favorite:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
   };
 
-  // Toggle cart (localStorage only)
-  const toggleCart = (id, name, isOutOfStock) => {
-    if (isOutOfStock) {
-      toast.error("This product is out of stock");
+  // ── إضافة/إزالة من السلة ──
+  const toggleCart = async (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!user) {
+      toast.error("سجل دخول الأول عشان تضيف للسلة");
       return;
     }
 
-    const updatedCart = { ...cart, [id]: !cart[id] };
-    const cartIds = Object.keys(updatedCart).filter((key) => updatedCart[key]);
+    const inCart = cart.includes(product.id);
+    const userRef = doc(db, "Users", user.uid);
 
-    localStorage.setItem("cart", JSON.stringify(cartIds));
-    window.dispatchEvent(new Event("cartUpdated"));
+    try {
+      await setDoc(
+        userRef,
+        {
+          cart: inCart ? arrayRemove(product.id) : arrayUnion(product.id),
+        },
+        { merge: true },
+      );
 
-    if (updatedCart[id]) toast.success(`Added ${name} to cart`);
-    else
-      toast(`Removed ${name} from cart`, {
-        icon: <AiOutlineClose color="red" size={20} />,
-      });
-
-    setCart(updatedCart);
+      toast.success(
+        inCart
+          ? `تم إزالة ${product.name} من السلة`
+          : `تم إضافة ${product.name} للسلة`,
+      );
+    } catch (error) {
+      console.error("Error updating cart:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
   };
 
-  // Pagination
-  const productsPerPage = 6;
-  const totalPages = Math.ceil(favProducts.length / productsPerPage);
+  const fadeUp = {
+    hidden: { opacity: 0, y: 24 },
+    visible: (i = 0) => ({
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.6, delay: i * 0.1, ease: "easeOut" },
+    }),
+  };
+
+  // ── حسابات الـ Pagination ──
+  const totalPages = Math.ceil(products.length / productsPerPage);
   const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
+  const startIndex = (currentPage - 1) * productsPerPage;
+  const currentProducts = products.slice(
+    startIndex,
+    startIndex + productsPerPage,
+  );
 
-  const endIndex = currentPage * productsPerPage;
-  const startIndex = endIndex - productsPerPage;
-
-  const currentProducts = favProducts.slice(startIndex, endIndex);
-
+  // ── لو الصفحة الحالية بقت فاضية بعد حذف منتج، ارجع للصفحة اللي قبلها ──
   useEffect(() => {
-    const totalPages = Math.ceil(favProducts.length / productsPerPage) || 1;
-
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
+    if (currentPage > 1 && startIndex >= products.length) {
+      setCurrentPage((prev) => Math.max(prev - 1, 1));
     }
-  }, [favProducts]);
+  }, [products.length, currentPage, startIndex]);
 
   return (
     <>
       <Navbar />
 
-      <section className="bg-background min-h-screen py-10">
-        <div className="max-w-7xl mx-auto px-6">
-          {/* Title */}
-          <motion.h2
-            className="font-extrabold text-2xl sm:text-4xl md:text-4xl text-primary text-center leading-tight
-            mb-10 md:mb-14 md:mt-7"
-            initial={{ opacity: 0, y: -40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.3 }}
-            transition={{ duration: 0.8 }}
-          >
-            Your Curated Favorite Products
-          </motion.h2>
-
-          {currentProducts.length === 0 ? (
-            <div className="flex flex-col items-center justify-cente mt-24">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-24 w-24 text-grayText/50 mb-6 animate-bounce"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
+      <section dir="rtl" className="bg-background min-h-screen font-sans">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          {/* العنوان - نفس بادينج وأنيميشن باقي صفحات الموقع */}
+          <div className="py-4 md:py-10">
+            <div className="max-w-3xl mx-auto text-center">
+              <motion.p
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={0}
+                variants={fadeUp}
+                className="text-sm font-semibold text-accent mb-4"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 
-       2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09
-       C13.09 3.81 14.76 3 16.5 3
-       19.58 3 22 5.42 22 8.5
-       c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
-                />
-              </svg>
+                مفضلتي
+              </motion.p>
 
-              <h3 className="text-2xl font-semibold text-grayText mb-2">
-                No Favorites Yet
-              </h3>
+              <motion.h2
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={1}
+                variants={fadeUp}
+                className="text-4xl md:text-5xl font-extrabold tracking-tight text-primary leading-[1.15]"
+              >
+                المنتجات التي أعجبتك
+              </motion.h2>
+
+              <motion.p
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={2}
+                variants={fadeUp}
+                className="mt-6 text-base md:text-lg text-grayText leading-relaxed max-w-xl mx-auto"
+              >
+                كل المنتجات اللي ضفتها للمفضلة في مكان واحد
+              </motion.p>
             </div>
-          ) : (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="grid gap-8 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-            >
-              {currentProducts.map((product, index) => (
-                <motion.div
-                  key={product.id}
-                  initial={{ opacity: 0, y: 40 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.07, duration: 0.5 }}
-                  viewport={{ once: true }}
-                  className="group relative bg-surface border border-border rounded-3xl shadow-md overflow-hidden hover:shadow-xl transition-all duration-300"
+          </div>
+
+          {/* المحتوى */}
+          <div className="pb-9 sm:pb-16">
+            {!authChecked || isLoading ? (
+              <div className="flex justify-center items-center py-32">
+                <div className="w-10 h-10 border-4 border-accent/30 border-t-accent rounded-full animate-spin" />
+              </div>
+            ) : !user ? (
+              /* ── لو مش مسجل دخول ── */
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="w-16 h-16 rounded-full bg-accent/10 border-2 border-accent flex items-center justify-center text-accent mb-4">
+                  <Heart size={26} />
+                </div>
+
+                <h3 className="text-xl font-bold text-primary mb-2">
+                  سجل الدخول للوصول إلى المفضلة
+                </h3>
+
+                <p className="text-grayText max-w-xs mb-5">
+                  يرجى تسجيل الدخول حتى تتمكن من إضافة المنتجات إلى قائمة
+                  المفضلة والوصول إليها في أي وقت.
+                </p>
+
+                <Link
+                  to="/login"
+                  className="px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-medium hover:bg-accent transition-colors"
                 >
-                  <div className="relative overflow-hidden rounded-t-3xl">
-                    <img
-                      src={product.image}
-                      alt={product.name}
-                      className={`w-full h-64 object-cover transform group-hover:scale-105 transition-transform duration-500 ${
-                        product.outOfStock ? "opacity-60 grayscale" : ""
-                      }`}
-                    />
+                  تسجيل الدخول
+                </Link>
+              </div>
+            ) : products.length === 0 ? (
+              /* ── لو مفيش منتجات مفضلة ── */
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="w-16 h-16 rounded-full bg-accent/10 border-2 border-accent flex items-center justify-center text-accent mb-4">
+                  <HeartOff size={26} />
+                </div>
 
-                    {/* Out of Stock Badge */}
-                    {product.outOfStock && (
-                      <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
-                        <div className="bg-danger text-white px-6 py-3 rounded-full font-bold text-lg shadow-lg transform rotate-[-15deg]">
-                          OUT OF STOCK
-                        </div>
-                      </div>
-                    )}
+                <h3 className="text-xl font-bold text-primary mb-2">
+                  لا توجد منتجات في المفضلة بعد
+                </h3>
 
-                    {/* Remove Favorite Button */}
-                    <button
-                      onClick={() => removeFavorite(product.id)}
-                      className="absolute top-4 right-4 bg-surface/95 p-2 rounded-full shadow hover:scale-105 transition z-50"
-                    >
-                      <AiFillHeart className="h-6 w-6 text-accent" />
-                    </button>
+                <p className="text-grayText max-w-xs mb-5">
+                  تصفّح متجرنا واكتشف منتجاتك المفضلة، ثم أضفها إلى قائمة
+                  المفضلة للعودة إليها في أي وقت.
+                </p>
 
-                    <div className="absolute left-4 bottom-4 bg-accent text-white text-sm font-medium px-3 py-1 rounded-full shadow-md">
-                      {product.category}
-                    </div>
-                  </div>
+                <Link
+                  to="/products"
+                  className="px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-medium hover:bg-accent transition-colors"
+                >
+                  تصفح المتجر
+                </Link>
+              </div>
+            ) : (
+              /* ── الكروت - نفس شكل FeaturedProducts بالظبط + Pagination ── */
+              <div className="flex flex-col min-h-[calc(100vh-320px)]">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  {currentProducts.map((product) => {
+                    const inCart = cart.includes(product.id);
 
-                  <div className="p-6 flex flex-col justify-between flex-1 sm:h-64">
-                    <h3 className="text-2xl font-semibold text-primary">
-                      {product.name}
-                    </h3>
-                    <p className="text-grayText mt-3 italic leading-relaxed">
-                      {product.details}
-                    </p>
-
-                    <div className="flex items-center justify-between mt-6">
-                      <div className="text-lg font-bold text-accent">
-                        {product.outOfStock ? (
-                          <span className="text-danger">Not Available</span>
-                        ) : product.realPrice !== product.price ? (
-                          <>
-                            <span className="line-through text-grayText/60 mr-2">
-                              {product.realPrice} EGP
-                            </span>
-                            {product.price} EGP
-                          </>
-                        ) : (
-                          `${product.price} EGP`
-                        )}
-                      </div>
-                      <button
-                        onClick={() =>
-                          toggleCart(
-                            product.id,
-                            product.name,
-                            product.outOfStock,
-                          )
-                        }
-                        disabled={product.outOfStock}
-                        className={`
-    flex items-center justify-center gap-1 py-2 px-4 rounded-lg font-semibold transition shadow
-    ${
-      product.outOfStock
-        ? "bg-grayText/30 text-grayText cursor-not-allowed"
-        : cart[product.id]
-          ? "bg-danger hover:bg-danger/90 text-white"
-          : "bg-primary hover:bg-primary-hover text-white"
-    }
-  `}
+                    return (
+                      <motion.div
+                        key={product.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-gradient-to-br from-accent/10 to-transparent border border-accent/30 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col sm:flex-row"
                       >
-                        {product.outOfStock ? (
-                          "Out of Stock"
-                        ) : cart[product.id] ? (
-                          <>
-                            Remove <FaShoppingCart size={20} color="white" />
-                          </>
-                        ) : (
-                          "Add To Cart"
-                        )}
+                        {/* الصورة */}
+                        <div
+                          onClick={() => setSelectedProduct(product)}
+                          className="relative aspect-square sm:aspect-auto sm:w-2/5 bg-surface cursor-pointer overflow-hidden shrink-0"
+                        >
+                          <img
+                            src={product.imageUrl}
+                            alt={product.name}
+                            className="w-full h-full object-contain p-6"
+                          />
+
+                          {/* أيقونات القلب و الشنطة و الـ Expand */}
+                          <div className="absolute top-3 left-3 flex flex-col gap-2">
+                            <button
+                              onClick={(e) => removeFavorite(e, product)}
+                              className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                              title="إزالة من المفضلة"
+                            >
+                              <Heart
+                                size={18}
+                                className="fill-danger text-danger"
+                              />
+                            </button>
+
+                            <button
+                              onClick={(e) => toggleCart(e, product)}
+                              className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                              title={inCart ? "إزالة من السلة" : "إضافة للسلة"}
+                            >
+                              <ShoppingBag
+                                size={17}
+                                className={
+                                  inCart ? "text-accent" : "text-grayText"
+                                }
+                              />
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedProduct(product);
+                              }}
+                              className="w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                            >
+                              <Maximize2 size={17} className="text-grayText" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* البيانات */}
+                        <div className="p-5 sm:p-6 flex flex-col flex-1">
+                          {product.category && (
+                            <span className="inline-block w-fit bg-accent/15 text-accent text-xs font-bold px-2.5 py-1 rounded-full mb-2">
+                              {product.category}
+                            </span>
+                          )}
+
+                          <h3 className="font-bold text-primary text-xl line-clamp-2">
+                            {product.name}
+                          </h3>
+
+                          {product.description && (
+                            <p className="text-grayText text-sm leading-relaxed line-clamp-3 mt-2">
+                              {product.description}
+                            </p>
+                          )}
+
+                          <div className="flex items-center gap-2 mt-3 mb-1.5">
+                            {product.discountPrice ? (
+                              <>
+                                <span className="text-grayText text-lg line-through">
+                                  {product.price} ج.م
+                                </span>
+                                <span className="text-primary font-extrabold text-2xl">
+                                  {product.discountPrice} ج.م
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-primary font-extrabold text-2xl">
+                                {product.price} ج.م
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="border-t border-accent/20 pt-3 flex items-center justify-between gap-2 h-7 mt-auto">
+                            <span className="text-grayText text-base font-semibold truncate">
+                              {product.shopName}
+                            </span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+
+                {/* Pagination - نفس شكل Products.jsx بالظبط */}
+                {totalPages > 1 && (
+                  <div className="flex justify-center mt-auto pt-20 gap-3 items-center flex-wrap">
+                    <button
+                      onClick={() =>
+                        currentPage > 1 && setCurrentPage(currentPage - 1)
+                      }
+                      disabled={currentPage === 1}
+                      className={`px-4 py-2 rounded-lg border ${
+                        currentPage === 1
+                          ? "bg-border/40 text-grayText cursor-not-allowed border-border"
+                          : "bg-surface text-primary border-border hover:bg-accent hover:text-white hover:border-accent"
+                      }`}
+                    >
+                      السابق
+                    </button>
+                    {pages.map((page) => (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`px-4 py-2 rounded-lg border ${
+                          page === currentPage
+                            ? "bg-accent text-white border-accent"
+                            : "bg-surface text-primary border-border hover:bg-accent hover:text-white hover:border-accent"
+                        }`}
+                      >
+                        {page}
                       </button>
-                    </div>
+                    ))}
+                    <button
+                      onClick={() =>
+                        currentPage < totalPages &&
+                        setCurrentPage(currentPage + 1)
+                      }
+                      disabled={currentPage >= totalPages}
+                      className={`px-4 py-2 rounded-lg border ${
+                        currentPage >= totalPages
+                          ? "bg-border/40 text-grayText cursor-not-allowed border-border"
+                          : "bg-surface text-primary border-border hover:bg-accent hover:text-white hover:border-accent"
+                      }`}
+                    >
+                      التالي
+                    </button>
                   </div>
-                </motion.div>
-              ))}
-            </motion.div>
-          )}
-          {/* Pagination */}
-          {currentProducts.length > 0 && (
-            <div className="flex justify-center mt-10 gap-3 items-center">
-              {/* Previous Button */}
-              <button
-                onClick={() =>
-                  currentPage > 1 && setCurrentPage(currentPage - 1)
-                }
-                disabled={currentPage === 1 || totalPages === 0}
-                className={`px-4 py-2 rounded-lg border ${
-                  currentPage === 1 || totalPages === 0
-                    ? "bg-border text-grayText cursor-not-allowed"
-                    : "bg-surface border-border text-primary hover:bg-primary hover:text-white"
-                }`}
-              >
-                Previous
-              </button>
-
-              {pages.map((page) => (
-                <button
-                  key={page}
-                  onClick={() => setCurrentPage(page)}
-                  className={`px-4 py-2 rounded-lg border ${
-                    page === currentPage
-                      ? "bg-primary text-white border-primary"
-                      : "bg-surface border-border text-primary hover:bg-primary hover:text-white"
-                  }`}
-                >
-                  {page}
-                </button>
-              ))}
-
-              {/* Next Button */}
-              <button
-                onClick={() =>
-                  currentPage < totalPages && setCurrentPage(currentPage + 1)
-                }
-                disabled={currentPage >= totalPages || totalPages === 0}
-                className={`px-4 py-2 rounded-lg border ${
-                  currentPage >= totalPages || totalPages === 0
-                    ? "bg-border text-grayText cursor-not-allowed"
-                    : "bg-surface border-border text-primary hover:bg-primary hover:text-white"
-                }`}
-              >
-                Next
-              </button>
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </section>
+
+      {/* الـ Popup - نفس شكل FeaturedProducts بالظبط */}
+      <AnimatePresence>
+        {selectedProduct && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelectedProduct(null)}
+            className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-surface rounded-2xl overflow-hidden max-w-2xl w-full max-h-[90vh] overflow-y-auto relative shadow-lg"
+            >
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="absolute top-3 left-3 z-10 w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+              >
+                <X size={18} className="text-primary" />
+              </button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2">
+                <div className="bg-background flex items-center justify-center p-6">
+                  <img
+                    src={selectedProduct.imageUrl}
+                    alt={selectedProduct.name}
+                    className="w-full h-full object-contain max-h-80"
+                  />
+                </div>
+
+                <div className="p-6 flex flex-col">
+                  {selectedProduct.category && (
+                    <span className="inline-block w-fit bg-accent/10 text-accent text-xs font-bold px-2.5 py-1 rounded-full mb-3">
+                      {selectedProduct.category}
+                    </span>
+                  )}
+
+                  <h3 className="text-xl font-extrabold text-primary mb-2">
+                    {selectedProduct.name}
+                  </h3>
+
+                  <div className="flex items-center gap-2 mb-4">
+                    {selectedProduct.discountPrice ? (
+                      <>
+                        <span className="text-grayText text-base line-through">
+                          {selectedProduct.price} ج.م
+                        </span>
+                        <span className="text-primary font-extrabold text-xl">
+                          {selectedProduct.discountPrice} ج.م
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-primary font-extrabold text-xl">
+                        {selectedProduct.price} ج.م
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-grayText text-sm leading-relaxed flex-1">
+                    {selectedProduct.description}
+                  </p>
+
+                  <div className="border-t border-border mt-4 pt-4">
+                    <span className="text-sm text-grayText">
+                      البائع:{" "}
+                      <span className="font-bold text-primary">
+                        {selectedProduct.shopName}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }

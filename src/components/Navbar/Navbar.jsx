@@ -12,7 +12,8 @@ import {
   X,
 } from "lucide-react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth } from "../../firebase";
+import { doc, onSnapshot } from "firebase/firestore";
+import { auth, db } from "../../firebase";
 
 const navLinks = [
   { label: "الرئيسية", path: "/" },
@@ -27,6 +28,8 @@ export default function Navbar({ overlay = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
   const [user, setUser] = useState(null);
+  const [favoritesCount, setFavoritesCount] = useState(0);
+  const [cartCount, setCartCount] = useState(0);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileAccountMenuOpen, setMobileAccountMenuOpen] = useState(false);
   const accountMenuRef = useRef(null);
@@ -39,6 +42,31 @@ export default function Navbar({ overlay = false }) {
     });
     return () => unsubscribe();
   }, []);
+
+  // ── قراءة عدد المفضلة والسلة لحظيًا (متزامنة مع باقي الموقع) ──
+  useEffect(() => {
+    if (!user) {
+      setFavoritesCount(0);
+      setCartCount(0);
+      return;
+    }
+
+    const userRef = doc(db, "Users", user.uid);
+
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+
+        setFavoritesCount((data.favorites || []).length);
+        setCartCount((data.cart || []).length);
+      } else {
+        setFavoritesCount(0);
+        setCartCount(0);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
 
   // Close either account dropdown when clicking outside it
   useEffect(() => {
@@ -173,26 +201,34 @@ export default function Navbar({ overlay = false }) {
             </AnimatePresence>
           </div>
 
-          <a
-            href="#"
+          <button
+            type="button"
+            onClick={() => navigate("/favorites")}
             aria-label="المفضلة"
-            className="relative w-9 h-9 rounded-full bg-white flex items-center justify-center text-primary hover:bg-accent hover:text-white transition-colors duration-200"
+            className="relative w-9 h-9 rounded-full bg-background flex items-center justify-center text-primary hover:bg-accent hover:text-white transition-colors duration-200"
           >
             <Heart size={16} />
-            <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center">
-              0
-            </span>
-          </a>
-          <a
-            href="#"
+
+            {favoritesCount > 0 && (
+              <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center border-2 border-background">
+                {favoritesCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/cart")}
             aria-label="السلة"
-            className="relative w-9 h-9 rounded-full bg-white flex items-center justify-center text-primary hover:bg-accent hover:text-white transition-colors duration-200"
+            className="relative w-9 h-9 rounded-full bg-background flex items-center justify-center text-primary hover:bg-accent hover:text-white transition-colors duration-200"
           >
             <ShoppingCart size={16} />
-            <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center">
-              0
-            </span>
-          </a>
+
+            {cartCount > 0 && (
+              <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center border-2 border-background">
+                {cartCount}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Mobile menu toggle */}
@@ -277,26 +313,34 @@ export default function Navbar({ overlay = false }) {
               </AnimatePresence>
             </div>
 
-            <a
-              href="#"
+            <button
+              type="button"
+              onClick={() => navigate("/favorites")}
               aria-label="المفضلة"
               className="relative w-9 h-9 rounded-full bg-background flex items-center justify-center text-primary hover:bg-accent hover:text-white transition-colors duration-200"
             >
               <Heart size={16} />
-              <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center">
-                0
-              </span>
-            </a>
-            <a
-              href="#"
+
+              {favoritesCount > 0 && (
+                <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center border-2 border-background">
+                  {favoritesCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/cart")}
               aria-label="السلة"
               className="relative w-9 h-9 rounded-full bg-background flex items-center justify-center text-primary hover:bg-accent hover:text-white transition-colors duration-200"
             >
               <ShoppingCart size={16} />
-              <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center">
-                0
-              </span>
-            </a>
+
+              {cartCount > 0 && (
+                <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center border-2 border-background">
+                  {cartCount}
+                </span>
+              )}
+            </button>
           </div>
         </nav>
       </div>
