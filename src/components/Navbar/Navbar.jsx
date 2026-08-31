@@ -107,6 +107,21 @@ export default function Navbar({ overlay = false }) {
     navigate("/login");
   };
 
+  // ── تنفيذ البحث والانتقال لصفحة المنتجات مع كلمة البحث ──
+  const handleSearch = () => {
+    const trimmed = searchValue.trim();
+    if (!trimmed) return;
+
+    navigate(`/products?search=${encodeURIComponent(trimmed)}`);
+    setMenuOpen(false);
+  };
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSearch();
+    }
+  };
   return (
     <header className="relative w-full bg-background">
       {/* ---------- Top row: logo + search + support ---------- */}
@@ -128,11 +143,13 @@ export default function Navbar({ overlay = false }) {
               type="text"
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
               placeholder="ابحث عن منتج..."
               className="flex-1 bg-background px-4 py-2.5 text-sm text-primary placeholder:text-grayText outline-none"
             />
             <button
               type="button"
+              onClick={handleSearch}
               aria-label="بحث"
               className="bg-primary hover:bg-primary-hover transition-colors duration-200 px-5 flex items-center justify-center"
             >
@@ -362,11 +379,13 @@ export default function Navbar({ overlay = false }) {
                   type="text"
                   value={searchValue}
                   onChange={(e) => setSearchValue(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
                   placeholder="ابحث عن منتج..."
                   className="flex-1 bg-background px-4 py-2.5 text-sm text-primary placeholder:text-grayText outline-none"
                 />
                 <button
                   type="button"
+                  onClick={handleSearch}
                   aria-label="بحث"
                   className="bg-primary px-5 flex items-center justify-center"
                 >

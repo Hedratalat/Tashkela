@@ -1,322 +1,635 @@
-import { motion } from "framer-motion";
-
-import Navbar from "../components/Navbar/Navbar";
-import { useEffect, useState } from "react";
-import { collection, onSnapshot } from "firebase/firestore";
-import { db } from "../firebase";
-import toast from "react-hot-toast";
+import { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  AiOutlineClose,
-  AiOutlineDelete,
-  AiOutlinePlus,
-  AiOutlineMinus,
-} from "react-icons/ai";
-import { useNavigate } from "react-router-dom";
+  doc,
+  onSnapshot,
+  getDocs,
+  collection,
+  query,
+  where,
+  documentId,
+  setDoc,
+} from "firebase/firestore";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { db } from "../firebase";
+import {
+  Maximize2,
+  X,
+  Trash2,
+  ShoppingCart,
+  Minus,
+  Plus,
+  AlertTriangle,
+} from "lucide-react";
+import toast from "react-hot-toast";
+import Navbar from "../components/Navbar/Navbar";
+
+// ── تحويل أي عنصر قديم (string) لصيغة {id, qty} تلقائيًا ──
+const normalizeCart = (rawCart) =>
+  (rawCart || []).map((item) =>
+    typeof item === "string" ? { id: item, qty: 1 } : item,
+  );
 
 export default function Cart() {
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  const [cart, setCart] = useState([]); // [{ id, qty }]
+
   const [products, setProducts] = useState([]);
-  const [cart, setCart] = useState(() => {
-    const localCart = JSON.parse(localStorage.getItem("cart")) || [];
-    return localCart.reduce((acc, id) => ({ ...acc, [id]: true }), {});
-  });
-  const [quantities, setQuantities] = useState(() => {
-    const localQuantities =
-      JSON.parse(localStorage.getItem("cartQuantities")) || {};
-    return localQuantities;
-  });
 
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [selectedProduct, setSelectedProduct] = useState(null);
+
+  // ── Popup تأكيد الحذف ──
+  const [productToDelete, setProductToDelete] = useState(null);
   const navigate = useNavigate();
-
   useEffect(() => {
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  // Fetch products (for display data: name, image, price...)
+  // ── تتبع حالة تسجيل الدخول ──
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, "Products"), (snap) => {
-      const data = snap.docs.map((doc) => {
-        const d = doc.data();
-        return {
-          id: doc.id,
-          name: d.name,
-          image: d.imageUrl,
-          price: d.discountPrice ? d.discountPrice : d.price,
-          realPrice: d.price,
-          category: d.category,
-          description: d.description,
-        };
-      });
-      setProducts(data);
-      localStorage.setItem("cartProducts", JSON.stringify(data));
+    const auth = getAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser || null);
+      setAuthChecked(true);
+
+      if (!currentUser) {
+        setCart([]);
+        setProducts([]);
+        setIsLoading(false);
+      }
     });
+
     return () => unsubscribe();
   }, []);
 
-  // Stay in sync if cart changes from another page (e.g. Products.jsx)
+  // ── قراءة الكارت لحظيًا ──
   useEffect(() => {
-    const syncCart = () => {
-      const localCart = JSON.parse(localStorage.getItem("cart")) || [];
-      const localQuantities =
-        JSON.parse(localStorage.getItem("cartQuantities")) || {};
-      setCart(localCart.reduce((acc, id) => ({ ...acc, [id]: true }), {}));
-      setQuantities(localQuantities);
+    if (!user) return;
+
+    const userRef = doc(db, "Users", user.uid);
+
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setCart(normalizeCart(data.cart));
+      } else {
+        setCart([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // ── جلب بيانات المنتجات الموجودة في السلة ──
+  useEffect(() => {
+    const fetchCartProducts = async () => {
+      if (!authChecked) return;
+
+      if (cart.length === 0) {
+        setProducts([]);
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const cartProductIds = cart.map((item) => item.id);
+
+        const chunks = [];
+        for (let i = 0; i < cartProductIds.length; i += 30) {
+          chunks.push(cartProductIds.slice(i, i + 30));
+        }
+
+        const results = await Promise.all(
+          chunks.map(async (chunk) => {
+            const q = query(
+              collection(db, "Products"),
+              where(documentId(), "in", chunk),
+            );
+
+            const snap = await getDocs(q);
+
+            return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          }),
+        );
+
+        const merged = results.flat();
+
+        // دمج بيانات المنتج مع الكمية + ترتيب الأحدث فوق
+        const ordered = [...cart]
+          .reverse()
+          .map((cartItem) => {
+            const productData = merged.find((p) => p.id === cartItem.id);
+            return productData ? { ...productData, qty: cartItem.qty } : null;
+          })
+          .filter(Boolean);
+
+        setProducts(ordered);
+      } catch (error) {
+        console.error("Error fetching cart products:", error);
+      } finally {
+        setIsLoading(false);
+      }
     };
 
-    window.addEventListener("cartUpdated", syncCart);
-    return () => window.removeEventListener("cartUpdated", syncCart);
-  }, []);
+    fetchCartProducts();
+  }, [cart, authChecked]);
 
-  // Update quantity function (localStorage only)
-  const updateQuantity = (id, change, name) => {
-    const currentQty = quantities[id] || 1;
-    const newQty = currentQty + change;
+  // ── زيادة الكمية ──
+  const increaseQty = async (product) => {
+    if (!user) return;
 
-    // If quantity becomes 0 or less, remove item from cart
-    if (newQty <= 0) {
-      removeFromCart(id, name);
+    const userRef = doc(db, "Users", user.uid);
+    const updatedCart = cart.map((item) =>
+      item.id === product.id ? { ...item, qty: item.qty + 1 } : item,
+    );
+
+    try {
+      await setDoc(userRef, { cart: updatedCart }, { merge: true });
+    } catch (error) {
+      console.error("Error increasing qty:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
+  };
+
+  // ── إنقاص الكمية (لو وصلت لـ 1 مبتقلش عن كده من هنا، لازم يستخدم زرار الحذف) ──
+  const decreaseQty = async (product) => {
+    if (!user) return;
+
+    if (product.qty <= 1) {
+      // لو عايز ينقص عن 1 لازم يأكد الحذف بدل ما يتشال فجأة
+      setProductToDelete(product);
       return;
     }
 
-    const updatedQuantities = { ...quantities, [id]: newQty };
-    setQuantities(updatedQuantities);
-    localStorage.setItem("cartQuantities", JSON.stringify(updatedQuantities));
-    window.dispatchEvent(new Event("cartUpdated"));
+    const userRef = doc(db, "Users", user.uid);
+    const updatedCart = cart.map((item) =>
+      item.id === product.id ? { ...item, qty: item.qty - 1 } : item,
+    );
+
+    try {
+      await setDoc(userRef, { cart: updatedCart }, { merge: true });
+    } catch (error) {
+      console.error("Error decreasing qty:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    }
   };
 
-  // Remove from cart function (localStorage only)
-  const removeFromCart = (id, name) => {
-    const updatedCart = { ...cart };
-    delete updatedCart[id];
-    const cartIds = Object.keys(updatedCart);
-
-    const updatedQuantities = { ...quantities };
-    delete updatedQuantities[id];
-
-    localStorage.setItem("cart", JSON.stringify(cartIds));
-    localStorage.setItem("cartQuantities", JSON.stringify(updatedQuantities));
-    window.dispatchEvent(new Event("cartUpdated"));
-
-    toast.error(`Removed ${name} from cart`, {
-      icon: <AiOutlineClose color="red" size={20} />,
-    });
-
-    setCart(updatedCart);
-    setQuantities(updatedQuantities);
+  // ── فتح Popup تأكيد الحذف ──
+  const askDeleteProduct = (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setProductToDelete(product);
   };
 
-  const cartItems = products.filter((p) => cart[p.id]);
-  const total = cartItems.reduce(
-    (acc, item) => acc + Number(item.price || 0) * (quantities[item.id] || 1),
-    0,
-  );
+  // ── تنفيذ الحذف الفعلي بعد التأكيد ──
+  const confirmDeleteProduct = async () => {
+    if (!user || !productToDelete) return;
+
+    const userRef = doc(db, "Users", user.uid);
+    const updatedCart = cart.filter((item) => item.id !== productToDelete.id);
+
+    try {
+      await setDoc(userRef, { cart: updatedCart }, { merge: true });
+      toast.success(`تم إزالة ${productToDelete.name} من السلة`);
+    } catch (error) {
+      console.error("Error removing from cart:", error);
+      toast.error("حصل خطأ، حاول تاني");
+    } finally {
+      setProductToDelete(null);
+    }
+  };
+
+  const fadeUp = {
+    hidden: { opacity: 0, y: 24 },
+    visible: (i = 0) => ({
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.6, delay: i * 0.1, ease: "easeOut" },
+    }),
+  };
+
+  // ── حسابات الملخص ──
+  const totalItemsCount = products.reduce((sum, p) => sum + p.qty, 0);
+  const totalPrice = products.reduce((sum, p) => {
+    const price = p.discountPrice ?? p.price ?? 0;
+    return sum + Number(price) * p.qty;
+  }, 0);
 
   return (
     <>
       <Navbar />
-      <section className="min-h-screen bg-background py-10 font-sans">
-        <div className="max-w-7xl mx-auto px-6">
-          <motion.h2
-            className="font-extrabold text-2xl sm:text-4xl md:text-4xl text-primary text-center leading-tight
-            mb-10 md:mb-14 md:mt-7"
-            initial={{ opacity: 0, y: -40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.3 }}
-            transition={{ duration: 0.8 }}
-          >
-            Your Cart Items
-          </motion.h2>
 
-          {/* Empty State */}
-          {cartItems.length === 0 && (
-            <motion.div
-              className="flex flex-col items-center justify-center mt-24"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.5 }}
-            >
-              {/* Animated Icon */}
-              <motion.svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-24 w-24 text-grayText/50 mb-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-                initial={{ y: 0 }}
-                animate={{ y: [0, -15, 0] }}
-                transition={{
-                  duration: 1,
-                  repeat: Infinity,
-                  ease: "easeInOut",
+      <section dir="rtl" className="bg-background min-h-screen font-sans">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          {/* العنوان */}
+          <div className="py-4 md:py-10">
+            <div className="max-w-3xl mx-auto text-center">
+              <motion.p
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
                 }}
+                custom={0}
+                variants={fadeUp}
+                className="text-sm font-semibold text-accent mb-4"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 6h15l-1.5 9H6L4 2H2"
-                />
-                <circle cx="9" cy="21" r="1" />
-                <circle cx="18" cy="21" r="1" />
-              </motion.svg>
+                سلة المشتريات
+              </motion.p>
 
-              <h3 className="text-2xl font-semibold text-grayText mb-2">
-                Your cart is empty
-              </h3>
-              <p className="text-grayText/70">
-                Add some products to get started
-              </p>
-            </motion.div>
-          )}
+              <motion.h2
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={1}
+                variants={fadeUp}
+                className="text-4xl md:text-5xl font-extrabold tracking-tight text-primary leading-[1.15]"
+              >
+                منتجات سلتك
+              </motion.h2>
 
-          {/* product */}
-          {cartItems.length > 0 && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              {/* left side product list */}
-              <div className="lg:col-span-2 space-y-6">
-                {cartItems.map((item, index) => (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, x: -50 }}
-                    whileInView={{ opacity: 1, x: 0 }}
-                    viewport={{ once: true }}
-                    transition={{ delay: index * 0.1, duration: 0.5 }}
-                    className="bg-surface border border-border rounded-2xl shadow-md overflow-hidden hover:shadow-lg transition-shadow duration-300"
-                  >
-                    <div className="flex flex-col sm:flex-row gap-4 p-5 relative">
-                      {/* Delete Icon - Top Right */}
-                      <button
-                        onClick={() => removeFromCart(item.id, item.name)}
-                        className="absolute top-2 right-2 text-white hover:text-white bg-danger/80 hover:bg-danger
-                        p-2 rounded-full transition-all duration-300 border border-danger/80"
-                      >
-                        <AiOutlineDelete size={18} />
-                      </button>
-
-                      {/* Product Image */}
-                      <div className="flex-shrink-0">
-                        <img
-                          src={item.image}
-                          alt={item.name}
-                          className="w-full sm:w-40 h-64 sm:h-40 object-cover rounded-xl"
-                        />
-                      </div>
-                      {/* Product Info */}
-                      <div className="flex-1 flex flex-col justify-between">
-                        <div>
-                          <h3 className="text-xl font-bold text-primary mb-2 pr-8">
-                            {item.name}
-                          </h3>
-                          <p className="text-sm text-grayText mb-2">
-                            {item.description}
-                          </p>
-                          <span className="inline-block bg-accent/10 text-accent text-sm font-medium px-3 py-1 rounded-full">
-                            {item.category}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center justify-between mt-4 gap-3 flex-wrap">
-                          {/* price */}
-                          <div className="text-lg font-bold text-accent">
-                            {item.realPrice !== item.price ? (
-                              <>
-                                <span className="line-through text-grayText/60 text-sm mr-2">
-                                  {item.realPrice} EGP
-                                </span>
-                                <span>{item.price} EGP</span>
-                              </>
-                            ) : (
-                              <span>{item.price} EGP</span>
-                            )}
-                          </div>
-
-                          {/* Quantity Controls */}
-                          <div className="flex items-center border border-border rounded-lg">
-                            <button
-                              onClick={() =>
-                                updateQuantity(item.id, -1, item.name)
-                              }
-                              className="p-2 hover:bg-background transition-colors"
-                            >
-                              <AiOutlineMinus size={16} />
-                            </button>
-                            <span className="px-4 py-2 font-semibold min-w-[40px] text-center text-primary">
-                              {quantities[item.id] || 1}
-                            </span>
-                            <button
-                              onClick={() =>
-                                updateQuantity(item.id, 1, item.name)
-                              }
-                              className="p-2 hover:bg-background transition-colors"
-                            >
-                              <AiOutlinePlus size={16} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-
-              {/* right side order*/}
-              <div className="lg:col-span-1">
-                {" "}
-                <motion.div
-                  initial={{ opacity: 0, y: 30 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.6 }}
-                  className="bg-surface border border-border rounded-2xl shadow-lg p-6 sticky top:24"
-                >
-                  <h3 className="text-2xl font-bold text-primary mb-6">
-                    Order Summary
-                  </h3>
-
-                  <div className="space-y-4 mb-6">
-                    <div className="flex justify-between text-grayText">
-                      <span>
-                        items (
-                        {cartItems.reduce(
-                          (acc, item) => acc + (quantities[item.id] || 1),
-                          0,
-                        )}
-                        )
-                      </span>
-                      <span>{total.toFixed(2)} EGP</span>
-                    </div>
-                    <div className="border-t border-border pt-4 flex justify-between items-baseline">
-                      <span className="text-lg font-semibold text-primary">
-                        Total
-                      </span>
-                      <span className="text-3xl font-extrabold text-accent">
-                        {total.toFixed(2)} EGP
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() =>
-                      navigate("/checkout", {
-                        state: { totalPrice: total.toFixed(2) },
-                      })
-                    }
-                    className="w-full bg-primary hover:bg-primary-hover text-white
-                  font-bold py-4 px-8 rounded-xl shadow-lg transition-all duration-300 transform hover:scale-[1.02]"
-                  >
-                    Proceed to Checkout
-                  </button>
-                  <p className="text-xs text-grayText text-center mt-4">
-                    Shipping not included yet
-                  </p>
-                </motion.div>
-              </div>
+              <motion.p
+                initial="hidden"
+                whileInView="visible"
+                viewport={{
+                  once: true,
+                  amount: 0.3,
+                  margin: "0px 0px -120px 0px",
+                }}
+                custom={2}
+                variants={fadeUp}
+                className="mt-6 text-base md:text-lg text-grayText leading-relaxed max-w-xl mx-auto"
+              >
+                راجع منتجاتك وكمياتك قبل إتمام الطلب
+              </motion.p>
             </div>
-          )}
+          </div>
+
+          {/* المحتوى */}
+          <div className="pb-9 sm:pb-16">
+            {!authChecked || isLoading ? (
+              <div className="flex justify-center items-center py-32">
+                <div className="w-10 h-10 border-4 border-accent/30 border-t-accent rounded-full animate-spin" />
+              </div>
+            ) : !user ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="w-16 h-16 rounded-full bg-accent/10 border-2 border-accent flex items-center justify-center text-accent mb-4">
+                  <ShoppingCart size={26} />
+                </div>
+                <h3 className="text-xl font-bold text-primary mb-2">
+                  سجل الدخول للوصول إلى السلة
+                </h3>
+                <p className="text-grayText max-w-xs mb-5">
+                  يرجى تسجيل الدخول حتى تتمكن من إضافة المنتجات إلى السلة
+                  والوصول إليها في أي وقت.
+                </p>
+                <Link
+                  to="/login"
+                  className="px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-medium hover:bg-accent transition-colors"
+                >
+                  تسجيل الدخول
+                </Link>
+              </div>
+            ) : products.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="w-16 h-16 rounded-full bg-accent/10 border-2 border-accent flex items-center justify-center text-accent mb-4">
+                  <ShoppingCart size={26} />
+                </div>
+                <h3 className="text-xl font-bold text-primary mb-2">
+                  السلة فارغة حاليًا
+                </h3>
+                <p className="text-grayText max-w-xs mb-5">
+                  تصفّح متجرنا وأضف المنتجات اللي عجبتك إلى السلة عشان تكمل
+                  عملية الشراء.
+                </p>
+                <Link
+                  to="/products"
+                  className="px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-medium hover:bg-accent transition-colors"
+                >
+                  تصفح المتجر
+                </Link>
+              </div>
+            ) : (
+              /* ── Layout: قائمة المنتجات + ملخص الطلب Sticky ── */
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* قائمة المنتجات */}
+                <div className="lg:col-span-2 flex flex-col gap-4">
+                  {products.map((product) => {
+                    const unitPrice =
+                      product.discountPrice ?? product.price ?? 0;
+                    const lineTotal = Number(unitPrice) * product.qty;
+
+                    return (
+                      <motion.div
+                        key={product.id}
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-surface border border-border rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row gap-4 hover:shadow-md transition"
+                      >
+                        {/* الصورة */}
+                        <div
+                          onClick={() => setSelectedProduct(product)}
+                          className="relative w-full sm:w-32 h-32 shrink-0 rounded-xl bg-background overflow-hidden cursor-pointer"
+                        >
+                          <img
+                            src={product.imageUrl}
+                            alt={product.name}
+                            className="w-full h-full object-contain p-3"
+                          />
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedProduct(product);
+                            }}
+                            className="absolute bottom-2 left-2 w-7 h-7 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+                          >
+                            <Maximize2 size={14} className="text-grayText" />
+                          </button>
+                        </div>
+
+                        {/* البيانات */}
+                        <div className="flex-1 min-w-0 flex flex-col">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              {product.category && (
+                                <span className="inline-block w-fit bg-accent/15 text-accent text-xs font-bold px-2.5 py-1 rounded-full mb-1.5">
+                                  {product.category}
+                                </span>
+                              )}
+                              <h3 className="font-bold text-primary text-lg truncate">
+                                {product.name}
+                              </h3>
+                              <p className="text-grayText text-sm truncate">
+                                {product.shopName}
+                              </p>
+                            </div>
+
+                            {/* حذف مباشر (اختصار سريع) */}
+                            <button
+                              onClick={(e) => askDeleteProduct(e, product)}
+                              className="shrink-0 w-9 h-9 rounded-full hover:bg-danger/10 flex items-center justify-center transition"
+                              title="إزالة من السلة"
+                            >
+                              <Trash2 size={18} className="text-danger" />
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-border">
+                            {/* السعر */}
+                            <div className="flex items-center gap-2">
+                              {product.discountPrice ? (
+                                <>
+                                  <span className="text-grayText text-sm line-through">
+                                    {product.price} ج.م
+                                  </span>
+                                  <span className="text-primary font-extrabold text-lg">
+                                    {product.discountPrice} ج.م
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-primary font-extrabold text-lg">
+                                  {product.price} ج.م
+                                </span>
+                              )}
+                            </div>
+
+                            {/* عداد الكمية */}
+                            <div className="flex items-center border border-border rounded-lg overflow-hidden">
+                              <button
+                                onClick={() => decreaseQty(product)}
+                                className="w-8 h-8 flex items-center justify-center hover:bg-background text-primary transition"
+                              >
+                                <Minus size={14} />
+                              </button>
+                              <span className="w-8 text-center font-semibold text-primary text-sm">
+                                {product.qty}
+                              </span>
+                              <button
+                                onClick={() => increaseQty(product)}
+                                className="w-8 h-8 flex items-center justify-center hover:bg-background text-primary transition"
+                              >
+                                <Plus size={14} />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 text-sm text-grayText">
+                            الإجمالي:{" "}
+                            <span className="font-bold text-primary">
+                              {lineTotal} ج.م
+                            </span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+
+                {/* ملخص الطلب - Sticky */}
+                <aside className="lg:col-span-1">
+                  <div className="lg:sticky lg:top-24 bg-surface border border-border rounded-2xl p-6">
+                    <h3 className="font-bold text-primary text-lg mb-5">
+                      ملخص الطلب
+                    </h3>
+
+                    <div className="flex justify-between text-sm text-grayText mb-2.5">
+                      <span>عدد القطع</span>
+                      <span className="font-semibold text-primary">
+                        {totalItemsCount}
+                      </span>
+                    </div>
+
+                    <div className="border-t border-border my-4" />
+
+                    <div className="flex justify-between items-center mb-6">
+                      <span className="font-bold text-primary">الإجمالي</span>
+                      <span className="font-extrabold text-accent text-2xl">
+                        {totalPrice} ج.م
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate("/checkout");
+                      }}
+                      className="w-full px-6 py-3 bg-primary text-white rounded-xl text-sm font-medium hover:bg-accent transition-colors"
+                    >
+                      إتمام الطلب
+                    </button>
+
+                    <p className="text-center text-xs text-grayText mt-3">
+                      تكلفة الشحن غير محسوبة بعد
+                    </p>
+                  </div>
+                </aside>
+              </div>
+            )}
+          </div>
         </div>
       </section>
+
+      {/* ── Popup تفاصيل المنتج ── */}
+      <AnimatePresence>
+        {selectedProduct && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelectedProduct(null)}
+            className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-surface rounded-2xl overflow-hidden max-w-2xl w-full max-h-[90vh] overflow-y-auto relative shadow-lg"
+            >
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="absolute top-3 left-3 z-10 w-9 h-9 rounded-full bg-surface/90 backdrop-blur flex items-center justify-center shadow-sm hover:scale-105 transition"
+              >
+                <X size={18} className="text-primary" />
+              </button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2">
+                <div className="bg-background flex items-center justify-center p-6">
+                  <img
+                    src={selectedProduct.imageUrl}
+                    alt={selectedProduct.name}
+                    className="w-full h-full object-contain max-h-80"
+                  />
+                </div>
+
+                <div className="p-6 flex flex-col">
+                  {selectedProduct.category && (
+                    <span className="inline-block w-fit bg-accent/10 text-accent text-xs font-bold px-2.5 py-1 rounded-full mb-3">
+                      {selectedProduct.category}
+                    </span>
+                  )}
+
+                  <h3 className="text-xl font-extrabold text-primary mb-2">
+                    {selectedProduct.name}
+                  </h3>
+
+                  <div className="flex items-center gap-2 mb-4">
+                    {selectedProduct.discountPrice ? (
+                      <>
+                        <span className="text-grayText text-base line-through">
+                          {selectedProduct.price} ج.م
+                        </span>
+                        <span className="text-primary font-extrabold text-xl">
+                          {selectedProduct.discountPrice} ج.م
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-primary font-extrabold text-xl">
+                        {selectedProduct.price} ج.م
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-grayText text-sm leading-relaxed flex-1">
+                    {selectedProduct.description}
+                  </p>
+
+                  <div className="border-t border-border mt-4 pt-4">
+                    <span className="text-sm text-grayText">
+                      البائع:{" "}
+                      <span className="font-bold text-primary">
+                        {selectedProduct.shopName}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Popup تأكيد الحذف ── */}
+      <AnimatePresence>
+        {productToDelete && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setProductToDelete(null)}
+            className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-surface rounded-2xl overflow-hidden max-w-sm w-full shadow-lg p-6"
+            >
+              <div className="flex flex-col items-center text-center">
+                <div className="w-14 h-14 rounded-full bg-danger/10 flex items-center justify-center text-danger mb-4">
+                  <AlertTriangle size={28} />
+                </div>
+
+                <h3 className="text-lg font-bold text-primary mb-2">
+                  تأكيد إزالة المنتج
+                </h3>
+
+                <p className="text-grayText text-sm mb-5">
+                  هل أنت متأكد من إزالة{" "}
+                  <span className="font-bold text-primary">
+                    {productToDelete.name}
+                  </span>{" "}
+                  من السلة؟
+                </p>
+
+                <div className="flex items-center gap-3 bg-background border border-border rounded-xl p-3 w-full mb-6">
+                  <img
+                    src={productToDelete.imageUrl}
+                    alt={productToDelete.name}
+                    className="w-12 h-12 object-contain shrink-0"
+                  />
+                  <div className="min-w-0 text-right flex-1">
+                    <p className="font-semibold text-primary text-sm truncate">
+                      {productToDelete.name}
+                    </p>
+                    <p className="text-grayText text-xs">
+                      الكمية: {productToDelete.qty}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 w-full">
+                  <button
+                    onClick={() => setProductToDelete(null)}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-border text-primary text-sm font-medium hover:bg-background transition-colors"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    onClick={confirmDeleteProduct}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-danger text-white text-sm font-medium hover:opacity-90 transition-colors"
+                  >
+                    تأكيد الحذف
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }

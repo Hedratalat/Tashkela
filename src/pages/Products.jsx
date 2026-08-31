@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   collection,
@@ -159,7 +159,7 @@ export default function Products() {
   const [user, setUser] = useState(null);
   const [favorites, setFavorites] = useState([]);
   const [cart, setCart] = useState([]);
-
+  const [searchParams] = useSearchParams();
   // ── جلب المنتجات ──
   useEffect(() => {
     const fetchProducts = async () => {
@@ -201,6 +201,14 @@ export default function Products() {
       behavior: "smooth",
     });
   }, [currentPage]);
+
+  // ── قراءة كلمة البحث من رابط الصفحة (لو جاية من الـ Navbar) ──
+  useEffect(() => {
+    const searchFromUrl = searchParams.get("search");
+    if (searchFromUrl) {
+      setSearch(searchFromUrl);
+    }
+  }, [searchParams]);
 
   // ── تتبع حالة تسجيل الدخول ──
   useEffect(() => {
